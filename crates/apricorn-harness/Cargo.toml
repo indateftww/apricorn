@@ -1,0 +1,13 @@
+[package]
+name = "apricorn-harness"
+description = "Behavioral-equivalence harness: oracle glue, arm-runner, trace diff, replay runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+apricorn-core.workspace = true
+
+[lints]
+workspace = true

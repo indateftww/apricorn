@@ -1,0 +1,12 @@
+[package]
+name = "apricorn-tools"
+description = "ROM and asset pipeline CLI (NDS container, NARC/BTX/SDAT, extraction)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

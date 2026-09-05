@@ -15,7 +15,8 @@ same formulas, same save format.
 - Your own dump of Pokémon HeartGold (US). Verify with:
   `Get-FileHash hg_usa.nds -Algorithm SHA1` (PowerShell) or
   `sha1sum hg_usa.nds`
-  and compare against the hash in [pret/pokeheartgold's README](https://github.com/pret/pokeheartgold).
+  Expected SHA1: `4fcded0e2713dc03929845de631d0932ea2b5a37`
+  (the retail US dump pret/pokeheartgold builds against).
   The ROM is never committed to this repo.
 
 apricorn is a fan research project for personal use. It contains no game assets.

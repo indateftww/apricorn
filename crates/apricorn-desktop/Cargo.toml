@@ -1,0 +1,20 @@
+[package]
+name = "apricorn-desktop"
+description = "Desktop app shell (Windows / Linux / macOS)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "apricorn"
+path = "src/main.rs"
+
+[dependencies]
+apricorn-core.workspace = true
+
+# winit / wgpu are added in Phase 3; deliberately absent so the workspace
+# stays fast to build until the renderer scaffold lands.
+
+[lints]
+workspace = true
