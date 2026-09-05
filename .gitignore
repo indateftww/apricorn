@@ -1,0 +1,35 @@
+# --- Never commit: copyrighted game data ---
+# Original ROMs (each developer supplies their own dump)
+*.nds
+*.ids
+*.sav
+*.dss
+*.bin
+!arm9.bin.example
+
+# Extracted / converted game assets
+assets/
+out/
+extracted/
+cache/
+
+# Third-party reference repos (cloned, not vendored)
+refs/
+
+# --- Rust ---
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# --- Harness artifacts ---
+# Traces contain state hashes only, but raw oracle dumps may embed game data
+traces/
+*.trace
+*.state-dump
+
+# --- IDE / OS ---
+.claude/settings.local.json
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

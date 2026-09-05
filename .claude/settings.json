@@ -1,0 +1,10 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://localhost:11434",
+    "ANTHROPIC_AUTH_TOKEN": "ollama",
+    "ANTHROPIC_MODEL": "glm-5.3:cloud",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.3-flash:cloud",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3:cloud",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3:cloud"
+  }
+}
