@@ -12,6 +12,7 @@
 
 #![deny(missing_docs)]
 
+pub mod formats;
 pub mod nds;
 
 /// Semantic version of the engine's state-machine / trace format.

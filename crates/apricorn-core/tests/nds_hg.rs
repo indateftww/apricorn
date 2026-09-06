@@ -9,7 +9,10 @@
 use apricorn_core::nds::NdsRom;
 
 const ROM_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../hg_usa.nds");
-const PRET_FILES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../refs/pokeheartgold/files");
+const PRET_FILES: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../refs/pokeheartgold/files"
+);
 
 /// Retail HeartGold (US) facts.
 const TITLE: &str = "POKEMON HG";
@@ -18,7 +21,16 @@ const DIR_COUNT: usize = 46;
 const FILE_COUNT: usize = 384;
 const FAT_COUNT: usize = 513;
 const OVERLAY_COUNT: usize = 129;
-const ROOT_DIRS: [&str; 8] = ["a", "data", "dwc", "fielddata", "msgdata", "pbr", "poketool", "tel"];
+const ROOT_DIRS: [&str; 8] = [
+    "a",
+    "data",
+    "dwc",
+    "fielddata",
+    "msgdata",
+    "pbr",
+    "poketool",
+    "tel",
+];
 
 fn load_rom() -> Option<Vec<u8>> {
     match std::fs::read(ROM_PATH) {
@@ -42,8 +54,14 @@ fn parses_retail_header() {
     // ARM9 binary ends before the overlay table (with alignment padding
     // in between on retail).
     assert!(rom.header.arm9.rom_offset + rom.header.arm9.size <= rom.header.arm9_overlay.offset);
-    assert!(rom.header_crc_ok(), "header CRC must verify against the retail dump");
-    assert!(rom.logo_crc_ok(), "logo CRC must verify against the retail dump");
+    assert!(
+        rom.header_crc_ok(),
+        "header CRC must verify against the retail dump"
+    );
+    assert!(
+        rom.logo_crc_ok(),
+        "logo CRC must verify against the retail dump"
+    );
 }
 
 #[test]
@@ -56,8 +74,12 @@ fn nitrofs_matches_pret_manifest_scale() {
     assert_eq!(fs.files().len(), FILE_COUNT);
     assert_eq!(fs.fat().len(), FAT_COUNT);
 
-    let mut roots: Vec<&str> =
-        fs.dirs().iter().filter(|d| d.parent == 0xF000).map(|d| d.path.as_str()).collect();
+    let mut roots: Vec<&str> = fs
+        .dirs()
+        .iter()
+        .filter(|d| d.parent == 0xF000)
+        .map(|d| d.path.as_str())
+        .collect();
     roots.sort_unstable();
     assert_eq!(roots, ROOT_DIRS);
 }
@@ -114,5 +136,7 @@ fn extracts_files_identical_to_pret_tree() {
         compared += 1;
     }
     assert!(compared > 0, "pret tree present but nothing to compare?");
-    eprintln!("compared {compared} NitroFS files against pret, {skipped} skipped (no source counterpart)");
+    eprintln!(
+        "compared {compared} NitroFS files against pret, {skipped} skipped (no source counterpart)"
+    );
 }

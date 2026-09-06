@@ -1,6 +1,6 @@
 //! The ARM9 overlay table.
 
-use super::{u32le, NdsError};
+use super::{NdsError, u32le};
 
 /// An entry of the ARM9 overlay table (0x20 bytes each).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,7 +39,9 @@ impl Overlay {
 pub(crate) fn parse_all(data: &[u8]) -> Result<Vec<Overlay>, NdsError> {
     const ENTRY: usize = 0x20;
     if !data.len().is_multiple_of(ENTRY) {
-        return Err(NdsError::Invalid { what: "overlay table size is not a multiple of 0x20" });
+        return Err(NdsError::Invalid {
+            what: "overlay table size is not a multiple of 0x20",
+        });
     }
     let mut overlays = Vec::with_capacity(data.len() / ENTRY);
     for i in 0..data.len() / ENTRY {

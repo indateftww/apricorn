@@ -107,9 +107,10 @@ decompilation), overlay 1 holds the script commands, etc.
 The NitroFS looks tiny — 46 directories, 384 files — while pret's unpacked
 `files/` tree counts 12,616 files. The difference is that the game's actual
 content (maps, Pokémon data, graphics, scripts, text) lives inside **NARC
-archives**: single NitroFS files that are themselves filesystems. Parsing
-NARCs (and the NCGR/NCLR/NSBMD/SDAT formats inside them) is the next Phase 1
-slice.
+archives**: single NitroFS files that are themselves filesystems. The NARC
+parser is done — see `docs/narc.md` (308 archives, 56,689 members). The
+NCGR/NCLR/NSBMD/SDAT formats *inside* the members are the remaining Phase 1
+slices.
 
 Relatedly, pret's `files/` tree is not a 1:1 image of the NitroFS: some
 files are stored as rebuildable sources (message banks as JSON, NARCs

@@ -1,9 +1,9 @@
 //! The ROM container tying header, filesystem, and overlays together.
 
-use super::header::{crc16_arc, Header};
+use super::header::{Header, crc16_arc};
 use super::nitrofs::NitroFs;
 use super::overlay;
-use super::{slice, NdsError};
+use super::{NdsError, slice};
 
 /// A parsed NDS ROM image.
 ///
@@ -33,7 +33,9 @@ impl<'a> NdsRom<'a> {
 
         for &(start, end) in fs.fat() {
             if start > end {
-                return Err(NdsError::Invalid { what: "FAT entry has start > end" });
+                return Err(NdsError::Invalid {
+                    what: "FAT entry has start > end",
+                });
             }
             if end as usize > data.len() {
                 return Err(NdsError::Truncated {
@@ -44,11 +46,20 @@ impl<'a> NdsRom<'a> {
             }
         }
 
-        let overlay_data =
-            slice(data, header.arm9_overlay.offset, header.arm9_overlay.size, "ARM9 overlay table")?;
+        let overlay_data = slice(
+            data,
+            header.arm9_overlay.offset,
+            header.arm9_overlay.size,
+            "ARM9 overlay table",
+        )?;
         let overlays = overlay::parse_all(overlay_data)?;
 
-        Ok(Self { data, header, fs, overlays })
+        Ok(Self {
+            data,
+            header,
+            fs,
+            overlays,
+        })
     }
 
     /// The Nitro filesystem parsed from this ROM.
@@ -69,9 +80,13 @@ impl<'a> NdsRom<'a> {
     /// # Errors
     /// Returns a [`NdsError`] if the id is out of range.
     pub fn file(&self, fat_id: u32) -> Result<&'a [u8], NdsError> {
-        let &(start, end) = self.fs.fat().get(fat_id as usize).ok_or(NdsError::Invalid {
-            what: "FAT id out of range",
-        })?;
+        let &(start, end) = self
+            .fs
+            .fat()
+            .get(fat_id as usize)
+            .ok_or(NdsError::Invalid {
+                what: "FAT id out of range",
+            })?;
         Ok(&self.data[start as usize..end as usize])
     }
 
@@ -201,8 +216,12 @@ mod tests {
         assert!(nds.header_crc_ok());
         assert!(nds.logo_crc_ok());
 
-        let files: Vec<(String, u32)> =
-            nds.nitrofs().files().iter().map(|f| (f.path.clone(), f.fat_id)).collect();
+        let files: Vec<(String, u32)> = nds
+            .nitrofs()
+            .files()
+            .iter()
+            .map(|f| (f.path.clone(), f.fat_id))
+            .collect();
         assert_eq!(
             files,
             vec![

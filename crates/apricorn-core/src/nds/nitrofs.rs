@@ -24,7 +24,7 @@
 //! ID. Overlay files occupy the first IDs (129 of them in HeartGold), which
 //! is why the root directory's `top_file_id` is 0x81.
 
-use super::{u16le, u32le, NdsError};
+use super::{NdsError, u16le, u32le};
 
 /// A file enumerated from the FNT.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,19 +65,31 @@ impl NitroFs {
     pub fn parse(fnt: &[u8], fat: &[u8]) -> Result<Self, NdsError> {
         let what = "FNT";
         if fnt.len() < 8 {
-            return Err(NdsError::Truncated { what, need: 8, got: fnt.len() });
+            return Err(NdsError::Truncated {
+                what,
+                need: 8,
+                got: fnt.len(),
+            });
         }
         let dir_count = usize::from(u16le(fnt, 6)?);
         let need = dir_count * 8;
         if fnt.len() < need {
-            return Err(NdsError::Truncated { what, need, got: fnt.len() });
+            return Err(NdsError::Truncated {
+                what,
+                need,
+                got: fnt.len(),
+            });
         }
 
         // The root record is record 0; its entry_start locates the root name
         // subtable and its "parent" field is the directory count.
         let mut records = Vec::with_capacity(dir_count);
         for i in 0..dir_count {
-            records.push((u32le(fnt, 8 * i)?, u16le(fnt, 8 * i + 4)?, u16le(fnt, 8 * i + 6)?));
+            records.push((
+                u32le(fnt, 8 * i)?,
+                u16le(fnt, 8 * i + 4)?,
+                u16le(fnt, 8 * i + 6)?,
+            ));
         }
 
         let mut dirs: Vec<NitroDir> = records
@@ -97,7 +109,11 @@ impl NitroFs {
             let mut pos = entry_start as usize;
             loop {
                 let Some(&first) = fnt.get(pos) else {
-                    return Err(NdsError::Truncated { what, need: pos + 1, got: fnt.len() });
+                    return Err(NdsError::Truncated {
+                        what,
+                        need: pos + 1,
+                        got: fnt.len(),
+                    });
                 };
                 pos += 1;
                 if first == 0 {
@@ -106,10 +122,16 @@ impl NitroFs {
                 let is_dir = first & 0x80 != 0;
                 let name_len = usize::from(first & 0x7F);
                 let Some(name_bytes) = fnt.get(pos..pos + name_len) else {
-                    return Err(NdsError::Truncated { what, need: pos + name_len, got: fnt.len() });
+                    return Err(NdsError::Truncated {
+                        what,
+                        need: pos + name_len,
+                        got: fnt.len(),
+                    });
                 };
-                let name = String::from_utf8(name_bytes.to_vec())
-                    .map_err(|_| NdsError::Invalid { what: "non-UTF-8 NitroFS name" })?;
+                let name =
+                    String::from_utf8(name_bytes.to_vec()).map_err(|_| NdsError::Invalid {
+                        what: "non-UTF-8 NitroFS name",
+                    })?;
                 pos += name_len;
 
                 let path = if prefix.is_empty() {
@@ -127,19 +149,26 @@ impl NitroFs {
                     pos += 2;
                     let child = usize::from(id & 0x0FFF);
                     if child == 0 || child >= dir_count {
-                        return Err(NdsError::Invalid { what: "FNT directory ID out of range" });
+                        return Err(NdsError::Invalid {
+                            what: "FNT directory ID out of range",
+                        });
                     }
                     dirs[child].path = path.clone();
                     stack.push((child, path));
                 } else {
-                    files.push(NitroFile { path, fat_id: u32::from(next_id) });
+                    files.push(NitroFile {
+                        path,
+                        fat_id: u32::from(next_id),
+                    });
                     next_id += 1;
                 }
             }
         }
 
         if dirs.iter().skip(1).any(|d| d.path.is_empty()) {
-            return Err(NdsError::Invalid { what: "FNT directory never referenced" });
+            return Err(NdsError::Invalid {
+                what: "FNT directory never referenced",
+            });
         }
 
         let fat_what = "FAT";
@@ -159,7 +188,11 @@ impl NitroFs {
             fat_entries.push((start, end));
         }
 
-        Ok(Self { dirs, files, fat: fat_entries })
+        Ok(Self {
+            dirs,
+            files,
+            fat: fat_entries,
+        })
     }
 
     /// All directories, in record order (index 0 is the root, path `""`).

@@ -1,6 +1,6 @@
 //! The 0x4000-byte NDS cartridge header.
 
-use super::{u16le, u32le, NdsError};
+use super::{NdsError, u16le, u32le};
 
 /// A region of the ROM described by an (offset, size) pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,10 +106,22 @@ impl Header {
                 ram_address: u32le(data, 0x38)?,
                 size: u32le(data, 0x3C)?,
             },
-            fnt: Region { offset: u32le(data, 0x40)?, size: u32le(data, 0x44)? },
-            fat: Region { offset: u32le(data, 0x48)?, size: u32le(data, 0x4C)? },
-            arm9_overlay: Region { offset: u32le(data, 0x50)?, size: u32le(data, 0x54)? },
-            arm7_overlay: Region { offset: u32le(data, 0x58)?, size: u32le(data, 0x5C)? },
+            fnt: Region {
+                offset: u32le(data, 0x40)?,
+                size: u32le(data, 0x44)?,
+            },
+            fat: Region {
+                offset: u32le(data, 0x48)?,
+                size: u32le(data, 0x4C)?,
+            },
+            arm9_overlay: Region {
+                offset: u32le(data, 0x50)?,
+                size: u32le(data, 0x54)?,
+            },
+            arm7_overlay: Region {
+                offset: u32le(data, 0x58)?,
+                size: u32le(data, 0x5C)?,
+            },
             banner_offset: u32le(data, 0x68)?,
             application_end_offset: u32le(data, 0x80)?,
             rom_header_size: u32le(data, 0x84)?,
@@ -121,7 +133,11 @@ impl Header {
     /// The game code as a string, if it is printable ASCII.
     #[must_use]
     pub fn game_code_str(&self) -> String {
-        self.game_code.iter().filter(|b| b.is_ascii_graphic()).map(|&b| b as char).collect()
+        self.game_code
+            .iter()
+            .filter(|b| b.is_ascii_graphic())
+            .map(|&b| b as char)
+            .collect()
     }
 }
 

@@ -63,11 +63,14 @@ unit-tested, no engine dependency.
 
 - [x] NDS container parser: header, file allocation table, NitroFS reading.
       → `apricorn-core::nds`, `docs/nds-container.md`
-- [ ] Archive & format parsers — the big one:
-      NARC (archives), NCGR/NCLR/NCGR screens (BG tiles/palettes/maps),
-      BTX (textures), SDAT (audio — parse now, play later), message/text banks,
-      BMAP/BTLM etc. Many are already documented; cross-check against
-      Tinke/mkds etc. and pret's headers.
+- [ ] Archive & format parsers — the big one (sub-items in rough
+      dependency order; cross-check each against Tinke/mkds-style docs
+      and pret's headers):
+      - [x] NARC (archives) → `apricorn-core::formats`, `docs/narc.md`
+      - [ ] NCGR/NCLR/NSCR (BG tiles/palettes/maps), NANR/NCER
+            (sprites + animation), BTX (textures)
+      - [ ] Message/text banks
+      - [ ] SDAT (audio — parse now, play later)
 - [ ] Extraction tool: ROM → unpacked tree + manifest (hashes, versioning).
 - [ ] Conversion step: raw formats → engine-friendly cached formats
       (e.g., tile sheets + palettes + collision metadata) so the runtime

@@ -10,7 +10,7 @@ pub mod nitrofs;
 pub mod overlay;
 pub mod rom;
 
-pub use header::{crc16_arc, ArmBinary, Header, Region};
+pub use header::{ArmBinary, Header, Region, crc16_arc};
 pub use nitrofs::{NitroDir, NitroFile, NitroFs};
 pub use overlay::Overlay;
 pub use rom::NdsRom;
@@ -56,7 +56,11 @@ impl std::error::Error for NdsError {}
 pub(crate) fn u16le(data: &[u8], offset: usize) -> Result<u16, NdsError> {
     let b = data
         .get(offset..offset + 2)
-        .ok_or_else(|| NdsError::Truncated { what: "u16", need: offset + 2, got: data.len() })?;
+        .ok_or_else(|| NdsError::Truncated {
+            what: "u16",
+            need: offset + 2,
+            got: data.len(),
+        })?;
     Ok(u16::from_le_bytes([b[0], b[1]]))
 }
 
@@ -67,7 +71,11 @@ pub(crate) fn u16le(data: &[u8], offset: usize) -> Result<u16, NdsError> {
 pub(crate) fn u32le(data: &[u8], offset: usize) -> Result<u32, NdsError> {
     let b = data
         .get(offset..offset + 4)
-        .ok_or_else(|| NdsError::Truncated { what: "u32", need: offset + 4, got: data.len() })?;
+        .ok_or_else(|| NdsError::Truncated {
+            what: "u32",
+            need: offset + 4,
+            got: data.len(),
+        })?;
     Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
@@ -82,8 +90,12 @@ pub(crate) fn slice<'a>(
     what: &'static str,
 ) -> Result<&'a [u8], NdsError> {
     let start = offset as usize;
-    let end = start
-        .checked_add(size as usize)
-        .ok_or(NdsError::Invalid { what: "region end offset overflows" })?;
-    data.get(start..end).ok_or(NdsError::Truncated { what, need: end, got: data.len() })
+    let end = start.checked_add(size as usize).ok_or(NdsError::Invalid {
+        what: "region end offset overflows",
+    })?;
+    data.get(start..end).ok_or(NdsError::Truncated {
+        what,
+        need: end,
+        got: data.len(),
+    })
 }
