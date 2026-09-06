@@ -25,11 +25,11 @@ out/
 Notes:
 
 - **Overlays are stored raw, exactly as in the ROM.** 127 of retail
-  HeartGold's 129 overlays are **headerless LZ77** (no `0x10` magic —
-  the compressed bytes begin with a flag byte, and the overlay table's
-  `raw_size` is the decompressed length). The manifest's `compressed`
-  flag says which; decompression belongs to the conversion step, not
-  extraction.
+  HeartGold's 129 overlays are **BLZ-compressed** (backwards LZ77 — no
+  `0x10` magic; the compressed bytes begin directly with a flag byte,
+  and the overlay table's `raw_size` is the decompressed length). The
+  manifest's `compressed` flag says which; decompression belongs to the
+  conversion step, not extraction.
 - **The NitroFS tree is namespaced under `nitrofs/`** so overlay/ and the
   binaries can never collide with a game directory name.
 - The NitroFS root's `""` path is the `nitrofs/` directory itself; empty
@@ -75,9 +75,9 @@ manifest.
   ],
   "overlays": [
     { "id": 0, "path": "overlay/arm9/overlay_0000.bin",
-      "ram_address": 35434240, "bss_size": 4992, "sinit_start": 35726328,
-      "sinit_end": 35726332, "fat_id": 0, "compressed": true,
-      "offset": 784384, "size": 129744, "raw_size": 216448,
+      "ram_address": 35543296, "bss_size": 4992, "sinit_start": 35742712,
+      "sinit_end": 35742716, "fat_id": 0, "compressed": true,
+      "offset": 783872, "size": 129744, "raw_size": 216448,
       "sha256": "a3f1e031…" }
   ]
 }

@@ -28,9 +28,10 @@ pub struct Overlay {
 }
 
 impl Overlay {
-    /// Whether the overlay is LZ77-compressed in ROM (headerless LZ77:
+    /// Whether the overlay is BLZ-compressed (backwards LZ77) in ROM:
     /// the decompressed size is [`Overlay::raw_size`], and the data
-    /// carries no `0x10` magic byte).
+    /// carries no `0x10` magic byte — the compressed stream begins with
+    /// a flag byte. See [`crate::nds::blz`].
     #[must_use]
     pub fn is_compressed(&self) -> bool {
         self.compressed_size & 0x0100_0000 != 0

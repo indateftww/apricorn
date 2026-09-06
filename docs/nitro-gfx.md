@@ -87,15 +87,21 @@ The PLTT section body is a serialized `NNSG2dPaletteData`:
 
 followed by BGR555 color bytes. The PMCP body is a serialized
 `NNSG2dPaletteCompressInfo`: `u16 numPalette`, `u16 pad 0xBEEF`,
-`u32 table offset (always 8)`, then `numPalette` u16 indices — which
-stored palette each palette slot reuses.
+`u32 table offset (always 8)`, then `numPalette` u16 indices — the VRAM
+slot each stored sub-palette loads into (a `NNS_G2dLoadPaletteEx`-style
+patch load; see the quirk below).
 
 Two quirks that a naive strict parser would reject, both enforced by the
 parser instead:
 
-- **Palette compression** (193 files): `szByte` exceeds the bytes stored.
-  The PLTT section holds only the *unique* palettes; the PMCP table maps
-  each slot onto one of them (`NNS_G2dLoadPaletteEx` consumes both).
+- **Palette compression** (193 files, all of them with a PMCP section):
+  `szByte` exceeds the bytes stored. The PLTT section carries only the
+  sub-palettes actually used, and the PMCP table names each one's VRAM
+  destination slot — a patch load, not decompression: the game loads
+  stored sub-palette *i* into slot `table[i]` (`NNS_G2dLoadPaletteEx`
+  consumes both) and leaves the rest of the logical palette space
+  untouched. A typical compressed file stores a single 16-color palette
+  (32 bytes) with `szByte` 480, destined for slot 8 or 9.
   `Nclr::is_compressed` detects the case. Three further files have
   `szByte` **smaller** than the stored bytes (including two placeholders
   with `szByte = 0`); the game just consumes less than is stored, so the
@@ -113,7 +119,10 @@ parser instead:
 
 The remaining 2,448 files store fmt 3 (4bpp) and 345 store fmt 4 (8bpp);
 748 files have a PMCP section, which always pairs with the 0xBEEF pad and
-the exact size formula `8 + 8 + 2×numPalette`.
+the exact size formula `8 + 8 + 2×numPalette`. The table is the identity
+(each stored palette *i* → slot *i*) on 605 of those 748; the remaining
+143 redirect — the cache chunk keeps the indices verbatim, so the engine
+applies the same patch load the game does.
 
 ## NSCR — screen maps (`RCSN` → SCRN `NRCS`)
 

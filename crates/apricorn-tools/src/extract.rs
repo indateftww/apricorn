@@ -189,7 +189,7 @@ fn run(path: &str, out_dir: &str) -> Result<Summary, String> {
 
 /// Writes `bytes` to `root/rel` (creating parent directories), reads the
 /// file back, and fails unless the readback is byte-identical.
-fn write_verified(root: &Path, rel: &str, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn write_verified(root: &Path, rel: &str, bytes: &[u8]) -> Result<(), String> {
     let path = root.join(rel);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("cannot create {}: {e}", rel))?;
@@ -203,7 +203,7 @@ fn write_verified(root: &Path, rel: &str, bytes: &[u8]) -> Result<(), String> {
 }
 
 /// The lowercase hex SHA-256 of `bytes`.
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -211,7 +211,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// A JSON string literal, with `"` `\` and control characters escaped.
-fn json(s: &str) -> String {
+pub(crate) fn json(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for c in s.chars() {

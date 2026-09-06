@@ -61,7 +61,7 @@ fn extracts_verified_tree_and_manifest() {
         "one hash per binary, NitroFS file, and overlay"
     );
     assert_eq!(manifest.matches("\"fat_id\"").count(), FILES + OVERLAYS);
-    // 127 of the 129 overlays are headerless-LZ77 compressed (the
+    // 127 of the 129 overlays are BLZ-compressed (backwards LZ77; the
     // compstatic flag, bit 24 of the compressed-size word); only 35 and
     // 124 are stored plain.
     assert_eq!(manifest.matches("\"compressed\": true").count(), 127);

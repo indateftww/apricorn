@@ -78,9 +78,11 @@ unit-tested, no engine dependency.
             `docs/nitro-sdat.md`
 - [x] Extraction tool: ROM → unpacked tree + manifest (hashes, versioning).
       → `apricorn-tools extract`, `docs/extraction.md`
-- [ ] Conversion step: raw formats → engine-friendly cached formats
+- [x] Conversion step: raw formats → engine-friendly cached formats
       (e.g., tile sheets + palettes + collision metadata) so the runtime
       loader stays fast and simple.
+      → `apricorn-core::cache`, `apricorn-tools convert`,
+      `docs/conversion.md`
 - [ ] Round-trip tests: re-serialize and byte-compare against the originals
       (guards against parser bugs).
 

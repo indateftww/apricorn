@@ -5,6 +5,7 @@
 //! `hg_usa.nds` (retail HeartGold US) and pret/pokeheartgold's build
 //! inputs; see `docs/nds-container.md` for the worked example.
 
+pub mod blz;
 pub mod header;
 pub mod nitrofs;
 pub mod overlay;

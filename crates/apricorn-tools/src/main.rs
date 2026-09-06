@@ -14,7 +14,10 @@
 //! playback parameters.
 //! `extract <rom> <out-dir>` — unpack a ROM into a verified asset tree
 //! plus a JSON manifest (see `docs/extraction.md`).
+//! `convert <rom> <out-dir>` — the conversion step: raw formats → engine
+//! cache chunks plus a JSON manifest (see `docs/conversion.md`).
 
+mod convert;
 mod extract;
 
 use std::process::ExitCode;
@@ -50,6 +53,7 @@ fn main() -> ExitCode {
         3 if args[0] == "sdat" => return sdat(&args[1], &args[2], false),
         4 if args[0] == "sdat" && args[3] == "list" => return sdat(&args[1], &args[2], true),
         3 if args[0] == "extract" => return extract::extract(&args[1], &args[2]),
+        3 if args[0] == "convert" => return convert::convert(&args[1], &args[2]),
         _ => {}
     }
     println!("apricorn-tools — ROM and asset pipeline (PLAN.md Phase 1)");
@@ -60,6 +64,7 @@ fn main() -> ExitCode {
     println!("       apricorn-tools msg <rom.nds> <nitrofs-path> [bank-id]");
     println!("       apricorn-tools sdat <rom.nds> <nitrofs-path> [list]");
     println!("       apricorn-tools extract <rom.nds> <out-dir>");
+    println!("       apricorn-tools convert <rom.nds> <out-dir>");
     ExitCode::from(64)
 }
 

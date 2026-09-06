@@ -106,9 +106,11 @@ stored size. The ROM is the spec — 127 of the 129 overlays are compressed,
 their compressed sizes all matching the flag convention and none setting
 bit 31.)
 
-Compressed overlays are **headerless LZ77**: no `0x10` magic or length
-word — the compressed bytes begin directly with a flag byte, and
-`raw_size` gives the decompressed length.
+Compressed overlays are **BLZ** (backwards LZ77, the `tools/blz` /
+`compstatic` scheme pret uses): no `0x10` magic or length word — the
+compressed bytes begin directly with a flag byte, and `raw_size` gives
+the decompressed length. See `crates/apricorn-core/src/nds/blz.rs` and
+`docs/conversion.md`.
 
 HeartGold has 129 ARM9 overlays, only 35 and 124 (tiny) stored plain.
 These are the game's modules: overlay 12 is battle (~64 KiB of it is ARM
