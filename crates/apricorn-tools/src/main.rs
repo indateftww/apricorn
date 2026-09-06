@@ -12,6 +12,10 @@
 //! `sdat <rom> <path> [list]` — summarize an SDAT sound archive (list
 //! counts, file census), or dump every SEQ entry with its label and
 //! playback parameters.
+//! `extract <rom> <out-dir>` — unpack a ROM into a verified asset tree
+//! plus a JSON manifest (see `docs/extraction.md`).
+
+mod extract;
 
 use std::process::ExitCode;
 
@@ -45,6 +49,7 @@ fn main() -> ExitCode {
         }
         3 if args[0] == "sdat" => return sdat(&args[1], &args[2], false),
         4 if args[0] == "sdat" && args[3] == "list" => return sdat(&args[1], &args[2], true),
+        3 if args[0] == "extract" => return extract::extract(&args[1], &args[2]),
         _ => {}
     }
     println!("apricorn-tools — ROM and asset pipeline (PLAN.md Phase 1)");
@@ -54,6 +59,7 @@ fn main() -> ExitCode {
     println!("       apricorn-tools gfx <rom.nds> <nitrofs-path> [member-id]");
     println!("       apricorn-tools msg <rom.nds> <nitrofs-path> [bank-id]");
     println!("       apricorn-tools sdat <rom.nds> <nitrofs-path> [list]");
+    println!("       apricorn-tools extract <rom.nds> <out-dir>");
     ExitCode::from(64)
 }
 

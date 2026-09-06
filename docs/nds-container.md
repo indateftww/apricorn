@@ -24,7 +24,7 @@ below are HeartGold's actual ones.
 | 0x44 | 4 | FNT size | 0x00000B56 |
 | 0x48 | 4 | FAT offset | 0x0031F800 |
 | 0x4C | 4 | FAT size | 0x00001008 |
-| 0x50 | 4 | ARM9 overlay table offset | 0x000BE3F0 |
+| 0x50 | 4 | ARM9 overlay table offset | 0x000BE400 |
 | 0x54 | 4 | ARM9 overlay table size | 0x00001020 |
 | 0x68 | 4 | banner offset | 0x00320A00 |
 | 0x6C | 2 | secure-area CRC | — |
@@ -35,8 +35,8 @@ below are HeartGold's actual ones.
 | 0x15E | 2 | header CRC | — |
 
 Note the ARM9/ARM7 *size* fields at 0x2C/0x3C — easy to miss, and without
-them the overlay-table offset (0xBE3F0) doesn't reconcile with the ARM9 end
-(0x4000 + 0xBA314 = 0xBE314; 0xDC of alignment padding follows).
+them the overlay-table offset (0xBE400) doesn't reconcile with the ARM9 end
+(0x4000 + 0xBA314 = 0xBE314; 0xEC of alignment padding follows).
 
 ### CRCs
 
@@ -90,17 +90,29 @@ entries, in overlay-number order:
 ```text
 u32 id                  // 0, 1, 2, … (HeartGold: 0..129)
 u32 ram_address
-u32 raw_size            // bit 31 set = LZ77-compressed in ROM
+u32 raw_size            // uncompressed (RAM) size
 u32 bss_size
 u32 sinit_start
 u32 sinit_end
 u32 fat_id             // index into the FAT (== the overlay id in HeartGold)
-u32 compressed_size
+u32 compressed_size     // bit 24 = LZ77-compressed, bits 0..24 = compressed size,
+                        // bit 25 = anti-piracy HMAC computed
 ```
 
-HeartGold has 129 ARM9 overlays, none compressed. These are the game's
-modules: overlay 12 is battle (~64 KiB of it is ARM asm in pret's
-decompilation), overlay 1 holds the script commands, etc.
+(GBATEK describes the compression flag as bit 31 of the size word, but
+retail HeartGold follows pret's `tools/compstatic` convention instead: the
+flag is bit 24 of the compressed-size word, whose low 24 bits hold the
+stored size. The ROM is the spec — 127 of the 129 overlays are compressed,
+their compressed sizes all matching the flag convention and none setting
+bit 31.)
+
+Compressed overlays are **headerless LZ77**: no `0x10` magic or length
+word — the compressed bytes begin directly with a flag byte, and
+`raw_size` gives the decompressed length.
+
+HeartGold has 129 ARM9 overlays, only 35 and 124 (tiny) stored plain.
+These are the game's modules: overlay 12 is battle (~64 KiB of it is ARM
+asm in pret's decompilation), overlay 1 holds the script commands, etc.
 
 ## Scale: the ROM is a shell
 

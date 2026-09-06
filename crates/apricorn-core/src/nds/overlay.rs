@@ -9,7 +9,7 @@ pub struct Overlay {
     pub id: u32,
     /// RAM address the overlay loads to.
     pub ram_address: u32,
-    /// Uncompressed size; bit 31 set means the overlay is LZ-compressed.
+    /// Uncompressed size of the overlay (the RAM size it occupies).
     pub raw_size: u32,
     /// Size of the overlay's BSS section.
     pub bss_size: u32,
@@ -19,15 +19,21 @@ pub struct Overlay {
     pub sinit_end: u32,
     /// FAT id of the overlay's file within the ROM.
     pub fat_id: u32,
-    /// Size of the compressed overlay, or 0 when uncompressed.
+    /// The compressed-size word: bits 0..24 hold the LZ-compressed size
+    /// (0 when uncompressed), bit 24 (0x0100_0000) marks the overlay as
+    /// LZ-compressed, and bit 25 (0x0200_0000) is the anti-piracy
+    /// HMAC-calculated flag (retail sets bit 24 only; see pret's
+    /// `tools/compstatic`, which builds this table byte-identically).
     pub compressed_size: u32,
 }
 
 impl Overlay {
-    /// Whether the overlay is LZ77-compressed in ROM.
+    /// Whether the overlay is LZ77-compressed in ROM (headerless LZ77:
+    /// the decompressed size is [`Overlay::raw_size`], and the data
+    /// carries no `0x10` magic byte).
     #[must_use]
     pub fn is_compressed(&self) -> bool {
-        self.raw_size & 0x8000_0000 != 0
+        self.compressed_size & 0x0100_0000 != 0
     }
 }
 
