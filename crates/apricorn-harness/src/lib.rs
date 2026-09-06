@@ -30,6 +30,7 @@
 
 #![deny(missing_docs)]
 
+pub mod input;
 pub mod regions;
 pub mod trace;
 
