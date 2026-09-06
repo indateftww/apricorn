@@ -6,6 +6,7 @@
 //! parse.
 
 pub mod btx;
+pub mod msg;
 pub mod nanr;
 pub mod narc;
 pub mod ncer;
@@ -14,6 +15,7 @@ pub mod nclr;
 pub mod nscr;
 
 pub use btx::{Btx, BtxPalette, BtxTexture, TexFmt, is_btx};
+pub use msg::{EOS, MsgBank};
 pub use nanr::{AnimElement, AnimResult, Nanr, PlayMode, Uaat, is_nanr};
 pub use narc::{Narc, is_narc};
 pub use ncer::{BoundingBox, Cell, CellMapping, Ncer, Ucat, VramTransfer, is_ncer};

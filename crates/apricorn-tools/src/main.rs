@@ -7,10 +7,12 @@
 //! `gfx <rom> <path> [id]` — summarize the NCGR/NCLR/NSCR/NCER/NANR/BTX
 //! members of a NARC (one line each), or dump every field of member
 //! `id`. A path that is itself a BTX (a loose `.nsbtx`) dumps directly.
+//! `msg <rom> <path> [id]` — summarize the MAT message banks of a NARC
+//! (one line each), or dump every message of bank `id` as raw code units.
 
 use std::process::ExitCode;
 
-use apricorn_core::formats::{Btx, Nanr, Narc, Ncer, Ncgr, Nclr, Nscr, is_btx};
+use apricorn_core::formats::{Btx, MsgBank, Nanr, Narc, Ncer, Ncgr, Nclr, Nscr, is_btx};
 use apricorn_core::nds::NdsRom;
 use sha1::{Digest as _, Sha1};
 
@@ -32,6 +34,12 @@ fn main() -> ExitCode {
                 return gfx(&args[1], &args[2], Some(id));
             }
         }
+        3 if args[0] == "msg" => return msg(&args[1], &args[2], None),
+        4 if args[0] == "msg" => {
+            if let Ok(id) = args[3].parse::<usize>() {
+                return msg(&args[1], &args[2], Some(id));
+            }
+        }
         _ => {}
     }
     println!("apricorn-tools — ROM and asset pipeline (PLAN.md Phase 1)");
@@ -39,6 +47,7 @@ fn main() -> ExitCode {
     println!("       apricorn-tools list <rom.nds>");
     println!("       apricorn-tools narc <rom.nds> <nitrofs-path>");
     println!("       apricorn-tools gfx <rom.nds> <nitrofs-path> [member-id]");
+    println!("       apricorn-tools msg <rom.nds> <nitrofs-path> [bank-id]");
     ExitCode::from(64)
 }
 
@@ -215,6 +224,83 @@ fn narc(path: &str, member_path: &str) -> ExitCode {
         match narc.name(id) {
             Some(name) => println!("{id:4}  {len:8}  {name:24}  {magic}", len = member.len()),
             None => println!("{id:4}  {len:8}  {magic}", len = member.len()),
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// Summarizes the MAT message banks of a NARC (one line each), or dumps
+/// every message of one bank as raw code units (decrypted; the trailing
+/// EOS included).
+fn msg(path: &str, member_path: &str, detail_id: Option<usize>) -> ExitCode {
+    let data = match std::fs::read(path) {
+        Ok(data) => data,
+        Err(e) => {
+            eprintln!("msg: cannot read {path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let rom = match parse(path, &data) {
+        Ok(rom) => rom,
+        Err(e) => {
+            eprintln!("msg: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let bytes = match rom.file_by_path(member_path) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            eprintln!("msg: no NitroFS file named {member_path}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let narc = match Narc::parse(bytes) {
+        Ok(narc) => narc,
+        Err(e) => {
+            eprintln!("msg: {member_path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if let Some(id) = detail_id {
+        if id >= narc.file_count() {
+            eprintln!("msg: {member_path} has no bank {id}");
+            return ExitCode::FAILURE;
+        }
+        let bank = match MsgBank::parse(narc.file(id).expect("id checked")) {
+            Ok(bank) => bank,
+            Err(e) => {
+                eprintln!("msg: {member_path} bank {id}: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        println!(
+            "{member_path} bank {id}: {} messages, key 0x{:04X}",
+            bank.message_count(),
+            bank.key()
+        );
+        for (i, message) in bank.messages().enumerate() {
+            let units: Vec<String> = message.iter().map(|u| format!("{u:04X}")).collect();
+            println!(
+                "msg {i:5}  {:3} units  [{}]",
+                message.len(),
+                units.join(" ")
+            );
+        }
+        return ExitCode::SUCCESS;
+    }
+
+    println!("{}: {} banks", member_path, narc.file_count());
+    for id in 0..narc.file_count() {
+        let member = narc.file(id).expect("id in range");
+        match MsgBank::parse(member) {
+            Ok(bank) => println!(
+                "{id:4}  {len:8}  MAT  {count:5} msgs  key 0x{key:04X}",
+                len = member.len(),
+                count = bank.message_count(),
+                key = bank.key()
+            ),
+            Err(e) => println!("{id:4}  {len:8}  (not a MAT: {e})", len = member.len()),
         }
     }
     ExitCode::SUCCESS

@@ -72,7 +72,8 @@ unit-tested, no engine dependency.
       - [x] NANR/NCER (sprites + animation)
             → `apricorn-core::formats`, `docs/nitro-sprite.md`
       - [x] BTX (textures) → `apricorn-core::formats`, `docs/nitro-btx.md`
-      - [ ] Message/text banks
+      - [x] Message/text banks (MAT) → `apricorn-core::formats`,
+            `docs/nitro-msg.md`
       - [ ] SDAT (audio — parse now, play later)
 - [ ] Extraction tool: ROM → unpacked tree + manifest (hashes, versioning).
 - [ ] Conversion step: raw formats → engine-friendly cached formats
