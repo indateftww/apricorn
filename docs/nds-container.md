@@ -109,8 +109,9 @@ The NitroFS looks tiny — 46 directories, 384 files — while pret's unpacked
 content (maps, Pokémon data, graphics, scripts, text) lives inside **NARC
 archives**: single NitroFS files that are themselves filesystems. The NARC
 parser is done — see `docs/narc.md` (308 archives, 56,689 members). The
-NCGR/NCLR/NSBMD/SDAT formats *inside* the members are the remaining Phase 1
-slices.
+NCGR/NCLR/NSCR graphics formats inside the members are done too
+(`docs/nitro-gfx.md`); NSBMD/SDAT and the remaining member formats are the
+Phase 1 slices still open.
 
 Relatedly, pret's `files/` tree is not a 1:1 image of the NitroFS: some
 files are stored as rebuildable sources (message banks as JSON, NARCs

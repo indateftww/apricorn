@@ -4,10 +4,12 @@
 //! facts, and check SHA-1 and CRCs.
 //! `list <rom>` — print every NitroFS file with its FAT id.
 //! `narc <rom> <path>` — list the members of a NitroFS NARC archive.
+//! `gfx <rom> <path> [id]` — summarize the NCGR/NCLR/NSCR members of a
+//! NARC (one line each), or dump every field of member `id`.
 
 use std::process::ExitCode;
 
-use apricorn_core::formats::Narc;
+use apricorn_core::formats::{Narc, Ncgr, Nclr, Nscr};
 use apricorn_core::nds::NdsRom;
 use sha1::{Digest as _, Sha1};
 
@@ -23,12 +25,19 @@ fn main() -> ExitCode {
             _ => {}
         },
         3 if args[0] == "narc" => return narc(&args[1], &args[2]),
+        3 if args[0] == "gfx" => return gfx(&args[1], &args[2], None),
+        4 if args[0] == "gfx" => {
+            if let Ok(id) = args[3].parse::<usize>() {
+                return gfx(&args[1], &args[2], Some(id));
+            }
+        }
         _ => {}
     }
     println!("apricorn-tools — ROM and asset pipeline (PLAN.md Phase 1)");
     println!("usage: apricorn-tools verify <rom.nds>");
     println!("       apricorn-tools list <rom.nds>");
     println!("       apricorn-tools narc <rom.nds> <nitrofs-path>");
+    println!("       apricorn-tools gfx <rom.nds> <nitrofs-path> [member-id]");
     ExitCode::from(64)
 }
 
@@ -205,6 +214,169 @@ fn narc(path: &str, member_path: &str) -> ExitCode {
         match narc.name(id) {
             Some(name) => println!("{id:4}  {len:8}  {name:24}  {magic}", len = member.len()),
             None => println!("{id:4}  {len:8}  {magic}", len = member.len()),
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// Summarizes the BG graphics members of a NARC, or dumps every field of
+/// one member. Members that are none of NCGR/NCLR/NSCR print as a bare
+/// magic.
+fn gfx(path: &str, member_path: &str, detail_id: Option<usize>) -> ExitCode {
+    let data = match std::fs::read(path) {
+        Ok(data) => data,
+        Err(e) => {
+            eprintln!("gfx: cannot read {path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let rom = match parse(path, &data) {
+        Ok(rom) => rom,
+        Err(e) => {
+            eprintln!("gfx: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let bytes = match rom.file_by_path(member_path) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            eprintln!("gfx: no NitroFS file named {member_path}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let narc = match Narc::parse(bytes) {
+        Ok(narc) => narc,
+        Err(e) => {
+            eprintln!("gfx: {member_path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if let Some(id) = detail_id {
+        if id >= narc.file_count() {
+            eprintln!("gfx: {member_path} has no member {id}");
+            return ExitCode::FAILURE;
+        }
+        let member = narc.file(id).expect("id checked");
+        if let Ok(ncgr) = Ncgr::parse(member) {
+            println!("{member_path} member {id}: NCGR");
+            println!("  version       0x{:04X}", ncgr.version());
+            println!(
+                "  grid          {}",
+                match (ncgr.height(), ncgr.width()) {
+                    (Some(h), Some(w)) => format!("{w}x{h} tiles"),
+                    _ => "none (linear OBJ data)".to_owned(),
+                }
+            );
+            println!("  pixel format  {}bpp", ncgr.bpp());
+            println!("  mapping       {:?}", ncgr.mapping());
+            println!(
+                "  characterFmt  0x{:08X}{}",
+                ncgr.character_fmt(),
+                if ncgr.has_vram_transfer() {
+                    " (VRAM-transfer)"
+                } else {
+                    ""
+                }
+            );
+            println!(
+                "  tile data     {} bytes ({} tiles)",
+                ncgr.tile_data().len(),
+                ncgr.tile_count()
+            );
+            println!(
+                "  CPOS         {}",
+                match ncgr.cpos() {
+                    Some((w, h)) => format!("{w}x{h} tiles"),
+                    None => "none".to_owned(),
+                }
+            );
+        } else if let Ok(nclr) = Nclr::parse(member) {
+            println!("{member_path} member {id}: NCLR");
+            println!("  version       0x{:04X}", nclr.version());
+            println!(
+                "  fmt           0x{:08X} ({}bpp)",
+                nclr.fmt_raw(),
+                nclr.bpp()
+            );
+            println!("  extended      {}", nclr.is_extended());
+            println!(
+                "  palette       {} stored colors ({} bytes), logical {} bytes",
+                nclr.color_count(),
+                nclr.palette_data().len(),
+                nclr.logical_size()
+            );
+            if nclr.is_compressed() {
+                println!("  compressed    yes (logical size exceeds stored bytes)");
+            }
+            if let Some(pmcp) = nclr.pmcp() {
+                let indices: Vec<String> = (0..usize::from(pmcp.num_palettes()))
+                    .map(|slot| pmcp.palette_of(slot).expect("slot in range").to_string())
+                    .collect();
+                println!(
+                    "  PMCP          {} slots -> [{}]",
+                    pmcp.num_palettes(),
+                    indices.join(",")
+                );
+            }
+        } else if let Ok(nscr) = Nscr::parse(member) {
+            println!("{member_path} member {id}: NSCR");
+            println!("  version       0x{:04X}", nscr.version());
+            println!(
+                "  screen        {}x{} px ({}x{} tiles)",
+                nscr.width(),
+                nscr.height(),
+                nscr.width_tiles(),
+                nscr.height_tiles()
+            );
+            println!("  colorMode     {}", nscr.color_mode());
+            println!("  screenFormat  {}", nscr.screen_format());
+            println!("  entries       {} bytes", nscr.entries().len());
+        } else {
+            eprintln!("gfx: {member_path} member {id} is not a NCGR/NCLR/NSCR");
+            return ExitCode::FAILURE;
+        }
+        return ExitCode::SUCCESS;
+    }
+
+    println!("{}: {} members", member_path, narc.file_count());
+    for id in 0..narc.file_count() {
+        let member = narc.file(id).expect("id in range");
+        let len = member.len();
+        if let Ok(ncgr) = Ncgr::parse(member) {
+            let dims = match (ncgr.height(), ncgr.width()) {
+                (Some(h), Some(w)) => format!("{w}x{h} tiles"),
+                _ => "linear".to_owned(),
+            };
+            println!(
+                "{id:4}  {len:8}  NCGR  {dims:14}  {}bpp  {:?}  {tiles} tiles",
+                ncgr.bpp(),
+                ncgr.mapping(),
+                tiles = ncgr.tile_count()
+            );
+        } else if let Ok(nclr) = Nclr::parse(member) {
+            println!(
+                "{id:4}  {len:8}  NCLR  {}bpp  {colors:4} colors  logical {logical}B{compressed}{pmcp}",
+                nclr.bpp(),
+                colors = nclr.color_count(),
+                logical = nclr.logical_size(),
+                compressed = if nclr.is_compressed() {
+                    " compressed"
+                } else {
+                    ""
+                },
+                pmcp = if nclr.pmcp().is_some() { " PMCP" } else { "" }
+            );
+        } else if let Ok(nscr) = Nscr::parse(member) {
+            println!(
+                "{id:4}  {len:8}  NSCR  {}x{}px  colorMode {}  screenFormat {}",
+                nscr.width(),
+                nscr.height(),
+                nscr.color_mode(),
+                nscr.screen_format()
+            );
+        } else {
+            println!("{id:4}  {len:8}  (not a BG graphics member)");
         }
     }
     ExitCode::SUCCESS

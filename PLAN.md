@@ -67,8 +67,9 @@ unit-tested, no engine dependency.
       dependency order; cross-check each against Tinke/mkds-style docs
       and pret's headers):
       - [x] NARC (archives) → `apricorn-core::formats`, `docs/narc.md`
-      - [ ] NCGR/NCLR/NSCR (BG tiles/palettes/maps), NANR/NCER
-            (sprites + animation), BTX (textures)
+      - [x] NCGR/NCLR/NSCR (BG tiles/palettes/maps)
+            → `apricorn-core::formats`, `docs/nitro-gfx.md`
+      - [ ] NANR/NCER (sprites + animation), BTX (textures)
       - [ ] Message/text banks
       - [ ] SDAT (audio — parse now, play later)
 - [ ] Extraction tool: ROM → unpacked tree + manifest (hashes, versioning).
