@@ -4,12 +4,13 @@
 //! facts, and check SHA-1 and CRCs.
 //! `list <rom>` — print every NitroFS file with its FAT id.
 //! `narc <rom> <path>` — list the members of a NitroFS NARC archive.
-//! `gfx <rom> <path> [id]` — summarize the NCGR/NCLR/NSCR members of a
-//! NARC (one line each), or dump every field of member `id`.
+//! `gfx <rom> <path> [id]` — summarize the NCGR/NCLR/NSCR/NCER/NANR
+//! members of a NARC (one line each), or dump every field of member
+//! `id`.
 
 use std::process::ExitCode;
 
-use apricorn_core::formats::{Narc, Ncgr, Nclr, Nscr};
+use apricorn_core::formats::{Nanr, Narc, Ncer, Ncgr, Nclr, Nscr};
 use apricorn_core::nds::NdsRom;
 use sha1::{Digest as _, Sha1};
 
@@ -219,9 +220,9 @@ fn narc(path: &str, member_path: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Summarizes the BG graphics members of a NARC, or dumps every field of
-/// one member. Members that are none of NCGR/NCLR/NSCR print as a bare
-/// magic.
+/// Summarizes the graphics members of a NARC, or dumps every field of
+/// one member. Members that are none of NCGR/NCLR/NSCR/NCER/NANR print
+/// as a bare magic.
 fn gfx(path: &str, member_path: &str, detail_id: Option<usize>) -> ExitCode {
     let data = match std::fs::read(path) {
         Ok(data) => data,
@@ -332,6 +333,93 @@ fn gfx(path: &str, member_path: &str, detail_id: Option<usize>) -> ExitCode {
             println!("  colorMode     {}", nscr.color_mode());
             println!("  screenFormat  {}", nscr.screen_format());
             println!("  entries       {} bytes", nscr.entries().len());
+        } else if let Ok(ncer) = Ncer::parse(member) {
+            println!("{member_path} member {id}: NCER");
+            println!("  version       0x{:04X}", ncer.version());
+            println!("  mapping       {:?}", ncer.mapping());
+            println!(
+                "  cells         {} (extended: {})",
+                ncer.cell_count(),
+                if ncer.is_extended() { "yes" } else { "no" }
+            );
+            println!(
+                "  OAM           {} entries",
+                ncer.cells().iter().map(|c| c.oam_count).sum::<usize>()
+            );
+            println!(
+                "  labels        {} ({})",
+                ncer.labels().len(),
+                ncer.labels().join(", ")
+            );
+            if let Some(vram) = ncer.vram_transfer() {
+                println!(
+                    "  VRAM transfer max {} bytes, {} blocks",
+                    vram.sz_byte_max,
+                    vram.blocks.len()
+                );
+            }
+            if let Some(ucat) = ncer.ucat() {
+                let attrs: Vec<String> = ucat.attrs().iter().map(|a| format!("0x{a:X}")).collect();
+                println!("  UCAT          [{}]", attrs.join(", "));
+            }
+            for (i, cell) in ncer.cells().iter().enumerate() {
+                let mut flags = String::new();
+                if cell.h_flip() {
+                    flags.push_str(" hflip");
+                }
+                if cell.v_flip() {
+                    flags.push_str(" vflip");
+                }
+                if cell.hv_flip() {
+                    flags.push_str(" hvflip");
+                }
+                if cell.has_bounding_rect() {
+                    flags.push_str(" rect");
+                }
+                println!(
+                    "  cell {i:3}     {} OAM, radius {}{flags}",
+                    cell.oam_count,
+                    cell.radius()
+                );
+                if let Some(b) = cell.bounding_box() {
+                    println!(
+                        "               bounds x {}..{} y {}..{}",
+                        b.min_x, b.max_x, b.min_y, b.max_y
+                    );
+                }
+                for j in 0..cell.oam_count {
+                    let (a0, a1, a2) = cell.oam_attr(j).expect("j in range");
+                    println!(
+                        "               oam {j}: attr0 0x{a0:04X} attr1 0x{a1:04X} attr2 0x{a2:04X}"
+                    );
+                }
+            }
+        } else if let Ok(nanr) = Nanr::parse(member) {
+            println!("{member_path} member {id}: NANR");
+            println!("  version       0x{:04X}", nanr.version());
+            println!(
+                "  sequences     {} ({} frames total){}",
+                nanr.sequence_count(),
+                nanr.total_frames(),
+                if nanr.uaat().is_some() { " UAAT" } else { "" }
+            );
+            for (i, seq) in nanr.sequences().iter().enumerate() {
+                println!(
+                    "  seq {i:3} \"{}\"  {} frames, loop {}, {:?}, {:?}",
+                    seq.label(),
+                    seq.frame_count(),
+                    seq.loop_start(),
+                    seq.element(),
+                    seq.play_mode()
+                );
+                for j in 0..seq.frame_count() {
+                    println!(
+                        "    frame {j:3} delay {:3}  {:?}",
+                        seq.frames()[j].delay,
+                        seq.result(j).expect("validated at parse")
+                    );
+                }
+            }
         } else {
             eprintln!("gfx: {member_path} member {id} is not a NCGR/NCLR/NSCR");
             return ExitCode::FAILURE;
@@ -374,6 +462,23 @@ fn gfx(path: &str, member_path: &str, detail_id: Option<usize>) -> ExitCode {
                 nscr.height(),
                 nscr.color_mode(),
                 nscr.screen_format()
+            );
+        } else if let Ok(ncer) = Ncer::parse(member) {
+            println!(
+                "{id:4}  {len:8}  NCER  {} cells  {} OAM  {:?}{}{}  {} labels",
+                ncer.cell_count(),
+                ncer.cells().iter().map(|c| c.oam_count).sum::<usize>(),
+                ncer.mapping(),
+                if ncer.is_extended() { "  ext" } else { "" },
+                if ncer.ucat().is_some() { "  UCAT" } else { "" },
+                ncer.labels().len()
+            );
+        } else if let Ok(nanr) = Nanr::parse(member) {
+            println!(
+                "{id:4}  {len:8}  NANR  {} seqs  {} frames{}",
+                nanr.sequence_count(),
+                nanr.total_frames(),
+                if nanr.uaat().is_some() { "  UAAT" } else { "" }
             );
         } else {
             println!("{id:4}  {len:8}  (not a BG graphics member)");

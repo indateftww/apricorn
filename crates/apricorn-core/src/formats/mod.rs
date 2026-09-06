@@ -2,14 +2,19 @@
 //!
 //! The NitroFS is only a shell; the game's actual content lives in NARC
 //! archives (see [`narc`]), which in turn hold the graphics/audio/text
-//! formats (NCGR, NCLR, SDAT, …) that later modules parse.
+//! formats (NCGR, NCLR, NSCR, NCER, NANR, SDAT, …) that later modules
+//! parse.
 
+pub mod nanr;
 pub mod narc;
+pub mod ncer;
 pub mod ncgr;
 pub mod nclr;
 pub mod nscr;
 
+pub use nanr::{AnimElement, AnimResult, Nanr, PlayMode, Uaat, is_nanr};
 pub use narc::{Narc, is_narc};
+pub use ncer::{BoundingBox, Cell, CellMapping, Ncer, Ucat, VramTransfer, is_ncer};
 pub use ncgr::{CharMapping, Ncgr, is_ncgr};
 pub use nclr::{Nclr, Pmcp, is_nclr};
 pub use nscr::{Nscr, is_nscr};
@@ -113,6 +118,64 @@ pub(crate) fn nitro_sections(
         });
     }
     Ok((version, sections))
+}
+
+/// Parses the label table of an `LBAL` section (the NCER/NANR label bank).
+///
+/// The section body is unusual: a bare array of `u32` string offsets with
+/// **no count header**, followed by NUL-terminated ASCII strings. The
+/// offsets are relative to the *end* of the offset array itself, are
+/// strictly increasing, and the first is always 0 — so the count is
+/// derived by scanning while the values remain plausible (the game's own
+/// loader does the same).
+///
+/// `off`/`size` locate the section (header included), as produced by
+/// [`nitro_sections`].
+pub(crate) fn nitro_labels(
+    data: &[u8],
+    off: usize,
+    size: usize,
+) -> Result<Vec<&str>, NdsError> {
+    let body = data.get(off + 8..off + size).ok_or(NdsError::Truncated {
+        what: "LBAL section body",
+        need: off + size,
+        got: data.len(),
+    })?;
+
+    // Offset scan: strictly increasing, starting at 0, pointing inside
+    // the section. The first value that breaks the pattern is the first
+    // byte of the string area.
+    let mut offsets: Vec<usize> = Vec::new();
+    let mut i = 0usize;
+    while body.len() >= 4 * (i + 1) {
+        let value = u32le(body, 4 * i)? as usize;
+        let plausible =
+            value < body.len() && (i == 0 && value == 0 || i > 0 && value > offsets[i - 1]);
+        if !plausible {
+            break;
+        }
+        offsets.push(value);
+        i += 1;
+    }
+
+    let strings_base = 4 * offsets.len();
+    let mut labels = Vec::with_capacity(offsets.len());
+    for &value in &offsets {
+        let start = strings_base + value;
+        let end = body[start..]
+            .iter()
+            .position(|&b| b == 0)
+            .map(|nul| start + nul)
+            .ok_or(NdsError::Invalid {
+                what: "LBAL label is not NUL-terminated",
+            })?;
+        labels.push(
+            core::str::from_utf8(&body[start..end]).map_err(|_| NdsError::Invalid {
+                what: "LBAL label is not ASCII",
+            })?,
+        );
+    }
+    Ok(labels)
 }
 
 /// A Nitro pixel format, from the SDK's `GXTexFmt` enum.

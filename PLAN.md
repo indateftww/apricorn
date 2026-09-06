@@ -69,7 +69,9 @@ unit-tested, no engine dependency.
       - [x] NARC (archives) → `apricorn-core::formats`, `docs/narc.md`
       - [x] NCGR/NCLR/NSCR (BG tiles/palettes/maps)
             → `apricorn-core::formats`, `docs/nitro-gfx.md`
-      - [ ] NANR/NCER (sprites + animation), BTX (textures)
+      - [x] NANR/NCER (sprites + animation)
+            → `apricorn-core::formats`, `docs/nitro-sprite.md`
+      - [ ] BTX (textures)
       - [ ] Message/text banks
       - [ ] SDAT (audio — parse now, play later)
 - [ ] Extraction tool: ROM → unpacked tree + manifest (hashes, versioning).
