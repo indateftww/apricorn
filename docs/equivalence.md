@@ -1,9 +1,8 @@
 # Behavioral equivalence — the harness methodology
 
 Reference for `apricorn-harness` (PLAN.md Phase 2). This document defines
-the methodology and the wire formats; the oracle and arm-runner each get
-their own notes later in the phase (`docs/oracle.md`,
-`docs/arm-runner.md`).
+the methodology and the wire formats; the oracle and arm-runner each
+have their own notes: `docs/oracle.md`, `docs/arm-runner.md`.
 
 ## The method
 
@@ -46,6 +45,14 @@ equivalence is: (a) oracle replay traces (determinism baseline), and
 on both sides with the same seeded memory, hashes compared. That
 validates our interpreter against the emulator before any game logic
 exists.
+
+Phase 2 closed with both demonstrated live:
+`tests/equivalence_hg.rs` runs `SetLCRNGSeed(0x1234)` then `LCRandom`
+at frame 20's boundary on the whole emulated console and on the bare
+interpreter — registers and region hashes identical through the strict
+comparator; and `corpus/boot-idle` replays EQUIVALENT through
+`scripts/replay.ps1` (a different pinned RTC diverges at frame 185,
+`sLCRNG_State`, with both hashes printed).
 
 ## The formats
 

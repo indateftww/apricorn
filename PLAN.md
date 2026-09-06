@@ -98,23 +98,27 @@ engine-loadable asset tree.
 The testing methodology that every later phase leans on. Build it *before*
 game features.
 
-- [ ] Build the headless melonDS oracle (moved from Phase 0): fixed RTC,
+- [x] Build the headless melonDS oracle (moved from Phase 0): fixed RTC,
       scripted input injection, RAM-watch hooks that emit traces.
-- [ ] `arm-runner`: ARM9 interpreter harness (test-only, not shipped) that
+- [x] `arm-runner`: ARM9 interpreter harness (test-only, not shipped) that
       loads original overlays and calls original functions with controlled
       inputs — a per-function oracle that works even where pret has no C.
-- [ ] Trace format + state-dump protocol: every N frames dump hashes of
+- [x] Trace format + state-dump protocol: every N frames dump hashes of
       game-state regions (RNG state, party, position, flags, map) from both
       oracle and our engine.
-- [ ] Input-script format (frame N: buttons / stylus) executable by both the
+- [x] Input-script format (frame N: buttons / stylus) executable by both the
       oracle and headless `apricorn-core`.
-- [ ] `apricorn-diff` comparator: pinpoints first divergence between two traces,
+- [x] `apricorn-diff` comparator: pinpoints first divergence between two traces,
       with hard-equality vs. may-drift state buckets (animation counters etc.).
-- [ ] Regression corpus: growing library of input scripts + expected traces,
+- [x] Regression corpus: growing library of input scripts + expected traces,
       run in CI.
 
 **Exit:** a single script replays a test input in both oracle and engine and
-prints "EQUIVALENT" or the exact frame/state of divergence.
+prints "EQUIVALENT" or the exact frame/state of divergence. — Done:
+`scripts/replay.ps1 corpus/boot-idle` (or `.sh`) prints EQUIVALENT, or
+the exact frame/region with both hashes. The "engine" side today is
+arm-runner per-function probes (`tests/equivalence_hg.rs`); the real
+apricorn-core replays through the same corpus machinery in Phase 4+.
 
 ---
 

@@ -148,6 +148,17 @@ probe (Phase 2 step 7).
 IRQs are masked (`IME[0] = 0`, CPSR `I` bit) for the probe's duration; a
 pending IRQ must not steal the PC mid-probe.
 
+**Probe timing — never at frame 0.** DirectBoot enters the game at its
+LZ-compressed ARM9 static main; crt0 decompresses it in place over the
+first few frames, so the pinned addresses hold compressed garbage until
+that finishes (a frame-0 probe dies in the step budget on an
+"undefined instruction" in what should be real code). Twenty frames in,
+the pinned functions are real code on both machines — the committed
+probe schedules and the differential tests use frame ≥ 20. There is no
+detector for "decompression finished"; the safe margin is a pinned
+constant of the corpus, verified by the pins' prologue hashes whenever
+arm-runner loads the image.
+
 ## Determinism guarantees
 
 Equivalence is frame-indexed, never wall-clock: the oracle runs N
