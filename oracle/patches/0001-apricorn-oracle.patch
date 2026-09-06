@@ -1,0 +1,859 @@
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index e85dd42..2a6bb79 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -235,3 +235,14 @@ endif()
+ #  )
+ #endif()
+ 
++# apricorn: the headless oracle frontend (differential-testing harness).
++# Built core-only — see apricorn's oracle/setup.ps1 for the determinism
++# flags (no Qt/SDL frontend, no JIT, no OpenGL, no GDB stub).
++add_executable(apricorn-oracle apricorn-oracle.cpp apricorn-platform.cpp)
++target_link_libraries(apricorn-oracle PRIVATE core)
++
++# Static-link the C++ runtime: the oracle must run without the MSYS2
++# toolchain on PATH (CI, harness tests shell out to it directly).
++if(WIN32)
++    target_link_options(apricorn-oracle PRIVATE -static -static-libgcc -static-libstdc++)
++endif()
+diff --git a/src/apricorn-oracle.cpp b/src/apricorn-oracle.cpp
+new file mode 100644
+index 0000000..b669c75
+--- /dev/null
++++ b/src/apricorn-oracle.cpp
+@@ -0,0 +1,465 @@
++/*
++    apricorn-oracle — the headless melonDS that produces apricorn traces.
++
++    Patched into melonDS 1.1 by the apricorn project (Phase 2 oracle).
++    Not a frontend: no window, no audio, no JIT, no GDB stub — built
++    against the core-only configuration (see oracle/setup.ps1). The
++    determinism contract is exactly those build flags plus the pinned
++    RTC and frame-indexed execution below.
++
++    It boots a ROM via DirectBoot (no BIOS/firmware dumps needed; the
++    generated firmware and FreeBIOS defaults are deterministic), runs
++    frames with injected input, hashes watched memory regions, and can
++    also run per-function probes (the `C` records) by hijacking the
++    ARM9 at a frame boundary exactly the way arm-runner does on its
++    own interpreter: registers in, step until the PC reaches a sentinel,
++    registers out.
++
++    All binary inputs are little-endian blobs compiled by the apricorn
++    Rust harness (single source of truth for the text formats); the
++    `*-sha1` header values are passthroughs of the canonical text-file
++    hashes so the comparator can gate producer pairs. The trace text
++    matches crates/apricorn-harness/src/trace.rs byte for byte.
++
++    usage:
++      apricorn-oracle run --rom ROM.nds --out trace.txt
++                         --regions regions.bin [--input input.bin]
++                         [--probes probes.bin] [--frames N] [--rtc ISO]
++                         --input-sha1 HEX --regions-sha1 HEX
++                         [--producer oracle-melonds-1.1]
++*/
++
++#include <cstdio>
++#include <cstring>
++#include <cstdlib>
++#include <string>
++#include <vector>
++#include <memory>
++#include <optional>
++
++#include "NDS.h"
++#include "NDSCart.h"
++#include "sha1/sha1.hpp" // extern "C" wrapper — sha1.c is compiled as C
++
++// melonDS's fixed-width aliases are namespaced; the oracle uses them
++// unqualified like the rest of the codebase.
++using melonDS::u8;
++using melonDS::u16;
++using melonDS::u32;
++using melonDS::u64;
++using melonDS::s32;
++
++// apricorn-platform.cpp: the headless stop flag set by SignalStop.
++namespace melonDS { namespace Platform { bool Stopped(); } }
++
++namespace {
++
++// ----- constants ----------------------------------------------------------
++
++// One NDS video frame at 59.8268 Hz — informational, pinned in the trace.
++constexpr const char* FRAME_RATE = "59.8268";
++// Default pinned RTC (the trace header records whichever was used).
++constexpr const char* DEFAULT_RTC = "2010-03-01T09:00:00";
++// melonDS text-format version of our trace (TRACE apricorn 1) and the
++// engine state version it must agree with (STATE_FORMAT_VERSION == 1).
++constexpr const char* TRACE_VERSION = "1";
++constexpr const char* STATE_FORMAT = "1";
++
++// The fake return address for probes. arm-runner uses 0xFFFF0000; here
++// the address must be *mapped* (melonDS prefetches code eagerly at
++// JumpTo), so we use the top of the probe stack: pushes land below it
++// and the probe loop stops before the PC is ever fetched.
++constexpr u32 PROBE_SENTINEL = 0x02300000;
++constexpr u32 PROBE_STACK_TOP = 0x02300000;
++constexpr u32 PROBE_STEP_BUDGET = 4 * 1024 * 1024; // same as arm-runner
++
++// ----- small utilities ----------------------------------------------------
++
++struct Blob
++{
++    std::vector<u8> data;
++    size_t pos = 0;
++
++    bool eof() const { return pos >= data.size(); }
++    u32 rd32()
++    {
++        if (pos + 4 > data.size()) { fprintf(stderr, "corrupt blob: short u32\n"); exit(2); }
++        u32 v = data[pos] | (data[pos+1] << 8) | (data[pos+2] << 16) | (u32(data[pos+3]) << 24);
++        pos += 4;
++        return v;
++    }
++    u16 rd16()
++    {
++        if (pos + 2 > data.size()) { fprintf(stderr, "corrupt blob: short u16\n"); exit(2); }
++        u16 v = data[pos] | (data[pos+1] << 8);
++        pos += 2;
++        return v;
++    }
++    u8 rd8()
++    {
++        if (pos >= data.size()) { fprintf(stderr, "corrupt blob: short u8\n"); exit(2); }
++        return data[pos++];
++    }
++    std::string rdstr(u32 len)
++    {
++        if (pos + len > data.size()) { fprintf(stderr, "corrupt blob: short string\n"); exit(2); }
++        std::string s(reinterpret_cast<char*>(&data[pos]), len);
++        pos += len;
++        return s;
++    }
++};
++
++std::vector<u8> ReadFile(const char* path)
++{
++    FILE* f = fopen(path, "rb");
++    if (!f) { fprintf(stderr, "cannot open %s\n", path); exit(2); }
++    fseek(f, 0, SEEK_END);
++    long len = ftell(f);
++    fseek(f, 0, SEEK_SET);
++    std::vector<u8> data(len);
++    if (len > 0 && fread(data.data(), len, 1, f) != 1) { fprintf(stderr, "read error on %s\n", path); exit(2); }
++    fclose(f);
++    return data;
++}
++
++std::string Sha1Hex(const u8* data, size_t len)
++{
++    SHA1_CTX ctx;
++    SHA1Init(&ctx);
++    SHA1Update(&ctx, const_cast<unsigned char*>(data), u32(len));
++    unsigned char digest[20];
++    SHA1Final(digest, &ctx);
++    char hex[41];
++    for (int i = 0; i < 20; i++) sprintf(&hex[i*2], "%02x", digest[i]);
++    return std::string(hex, 40);
++}
++
++// ----- blob formats (compiled by the Rust harness) -----------------------
++
++struct InputFrame
++{
++    u16 keymask; // melonDS SetKeyMask layout: A,B,Sel,Start,R,Lt,Up,Dn,Rt,L,X,Y = bits 0..11
++    bool touch_down;
++    u16 touch_x, touch_y;
++};
++
++struct InputScript
++{
++    std::vector<InputFrame> frames; // beyond the list: all-zero input
++};
++
++struct Region
++{
++    u32 addr, size, sample; // hash every `sample` frames
++    std::string name;
++};
++
++struct Probe
++{
++    u32 frame;      // run before that frame's input+execution
++    u32 entry;      // bit 0 = Thumb
++    u32 args[4];
++    std::string name;
++};
++
++InputScript ParseInput(Blob b)
++{
++    InputScript in;
++    u32 count = b.rd32();
++    in.frames.resize(count);
++    for (u32 i = 0; i < count; i++)
++    {
++        in.frames[i].keymask = b.rd16();
++        in.frames[i].touch_down = b.rd8() != 0;
++        (void)b.rd8(); // padding
++        in.frames[i].touch_x = b.rd16();
++        in.frames[i].touch_y = b.rd16();
++    }
++    return in;
++}
++
++std::vector<Region> ParseRegions(Blob b)
++{
++    u32 count = b.rd32();
++    std::vector<Region> regions(count);
++    for (u32 i = 0; i < count; i++)
++    {
++        regions[i].addr = b.rd32();
++        regions[i].size = b.rd32();
++        regions[i].sample = b.rd32();
++        regions[i].name = b.rdstr(b.rd32());
++    }
++    return regions;
++}
++
++std::vector<Probe> ParseProbes(Blob b)
++{
++    u32 count = b.rd32();
++    std::vector<Probe> probes(count);
++    for (u32 i = 0; i < count; i++)
++    {
++        probes[i].frame = b.rd32();
++        probes[i].entry = b.rd32();
++        u32 nargs = b.rd32();
++        if (nargs > 4) { fprintf(stderr, "corrupt probes blob: >4 args\n"); exit(2); }
++        // args[4] is always present in the blob (the doc contract); nargs
++        // says how many of them are meaningful.
++        for (u32 a = 0; a < 4; a++)
++            probes[i].args[a] = b.rd32();
++        probes[i].name = b.rdstr(b.rd32());
++    }
++    return probes;
++}
++
++// ----- machine ------------------------------------------------------------
++
++// Reads a region's bytes through the ARM9 bus (works for any mapped
++// region regardless of its backing store).
++std::vector<u8> ReadRegion(melonDS::NDS& nds, const Region& r)
++{
++    std::vector<u8> bytes(r.size);
++    for (u32 i = 0; i < r.size; i++)
++        bytes[i] = nds.ARM9Read8(r.addr + i);
++    return bytes;
++}
++
++// SHA-1 over the concatenation of all regions, in regions.conf order —
++// the `state` field of a C record. arm-runner's Rust probe computes
++// the identical digest over its own memory.
++std::string StateHash(melonDS::NDS& nds, const std::vector<Region>& regions)
++{
++    SHA1_CTX ctx;
++    SHA1Init(&ctx);
++    for (const Region& r : regions)
++    {
++        std::vector<u8> bytes = ReadRegion(nds, r);
++        SHA1Update(&ctx, bytes.data(), u32(bytes.size()));
++    }
++    unsigned char digest[20];
++    SHA1Final(digest, &ctx);
++    char hex[41];
++    for (int i = 0; i < 20; i++) sprintf(&hex[i*2], "%02x", digest[i]);
++    return std::string(hex, 40);
++}
++
++struct SavedARM9
++{
++    u32 R[16];
++    u32 CPSR;
++    s32 Cycles;
++    u64 Timestamp, Target;
++    u32 IME;
++};
++
++// Runs one probe: saves the ARM9, enters the leaf function exactly
++// like arm-runner's prepare_call, single-steps until the PC reaches
++// the sentinel (or the budget dies), emits a C record, restores.
++void RunProbe(melonDS::NDS& nds, const Probe& probe, u32 seq,
++              const std::vector<Region>& regions, FILE* out)
++{
++    SavedARM9 saved;
++    memcpy(saved.R, nds.ARM9.R, sizeof(saved.R));
++    saved.CPSR = nds.ARM9.CPSR;
++    saved.Cycles = nds.ARM9.Cycles;
++    saved.Timestamp = nds.ARM9Timestamp;
++    saved.Target = nds.ARM9Target;
++    saved.IME = nds.IME[0];
++
++    // Enter the leaf. IRQs off for the probe's duration: the machine
++    // is at a frame boundary, but a pending IRQ must not steal the PC.
++    nds.IME[0] = 0;
++    nds.ARM9.R[12] = 0;
++    for (int i = 0; i < 4; i++)
++        nds.ARM9.R[i] = probe.args[i];
++    nds.ARM9.R[13] = PROBE_STACK_TOP;
++    nds.ARM9.R[14] = PROBE_SENTINEL;
++    nds.ARM9.CPSR |= 0x80; // mask IRQs; JumpTo sets/clears the Thumb bit
++    nds.ARM9.JumpTo(probe.entry); // bit 0 picks Thumb
++
++    u32 steps = 0;
++    while (true)
++    {
++        // melonDS keeps R[15] as instruction address + (Thumb ? 2 : 4).
++        bool thumb = (nds.ARM9.CPSR & 0x20) != 0;
++        u32 cur = nds.ARM9.R[15] - (thumb ? 2 : 4);
++        if (cur == PROBE_SENTINEL)
++            break;
++        if (steps++ >= PROBE_STEP_BUDGET)
++        {
++            fprintf(stderr, "probe %s: exceeded %u steps without returning\n",
++                    probe.name.c_str(), PROBE_STEP_BUDGET);
++            exit(3);
++        }
++        // One instruction: the interpreter runs until the ARM9 clock
++        // reaches its target, so a one-cycle target steps exactly once.
++        nds.ARM9Target = nds.ARM9Timestamp + 1;
++        nds.ARM9.Execute<melonDS::CPUExecuteMode::Interpreter>();
++    }
++
++    fprintf(out, "C %u %s r0=0x%08x r1=0x%08x r2=0x%08x r3=0x%08x state=%s\n",
++            seq, probe.name.c_str(),
++            nds.ARM9.R[0], nds.ARM9.R[1], nds.ARM9.R[2], nds.ARM9.R[3],
++            StateHash(nds, regions).c_str());
++
++    // Restore. Registers and timing come back verbatim; JumpTo takes
++    // the *instruction address* (R[15] in melonDS is address+2/+4, so
++    // translate first, letting bit 0 re-select Thumb) and rebuilds the
++    // fetch state (NextInstr etc.) the probe trampled.
++    nds.IME[0] = saved.IME;
++    memcpy(nds.ARM9.R, saved.R, sizeof(saved.R));
++    nds.ARM9.CPSR = saved.CPSR;
++    nds.ARM9.Cycles = saved.Cycles;
++    nds.ARM9Timestamp = saved.Timestamp;
++    nds.ARM9Target = saved.Target;
++    bool was_thumb = (saved.CPSR & 0x20) != 0;
++    nds.ARM9.JumpTo(saved.R[15] - (was_thumb ? 2 : 4) | (was_thumb ? 1 : 0));
++}
++
++// ----- argument parsing ---------------------------------------------------
++
++struct Args
++{
++    std::string rom, out, producer = "oracle-melonds-1.1";
++    std::string input, regions, probes; // blob paths; regions required
++    u32 frames = 600;
++    std::string rtc = DEFAULT_RTC;
++    std::string input_sha1, regions_sha1; // passthrough header gates
++};
++
++std::optional<Args> ParseArgs(int argc, char** argv)
++{
++    Args a;
++    // The leading `run` subcommand (the future sibling is `call`) is
++    // accepted but has no options of its own — the flags below define it.
++    int start = 1;
++    if (argc > 1 && !strcmp(argv[1], "run"))
++        start = 2;
++    for (int i = start; i < argc; i++)
++    {
++        auto next = [&](const char* what) -> const char*
++        {
++            if (i + 1 >= argc) { fprintf(stderr, "%s needs a value\n", what); exit(64); }
++            return argv[++i];
++        };
++        if (!strcmp(argv[i], "--rom")) a.rom = next("--rom");
++        else if (!strcmp(argv[i], "--out")) a.out = next("--out");
++        else if (!strcmp(argv[i], "--producer")) a.producer = next("--producer");
++        else if (!strcmp(argv[i], "--input")) a.input = next("--input");
++        else if (!strcmp(argv[i], "--regions")) a.regions = next("--regions");
++        else if (!strcmp(argv[i], "--probes")) a.probes = next("--probes");
++        else if (!strcmp(argv[i], "--frames")) a.frames = u32(atoi(next("--frames")));
++        else if (!strcmp(argv[i], "--rtc")) a.rtc = next("--rtc");
++        else if (!strcmp(argv[i], "--input-sha1")) a.input_sha1 = next("--input-sha1");
++        else if (!strcmp(argv[i], "--regions-sha1")) a.regions_sha1 = next("--regions-sha1");
++        else { fprintf(stderr, "unknown argument %s\n", argv[i]); exit(64); }
++    }
++    if (a.rom.empty() || a.out.empty() || a.regions.empty()
++        || a.input_sha1.empty() || a.regions_sha1.empty())
++        return std::nullopt;
++    return a;
++}
++
++} // namespace
++
++int main(int argc, char** argv)
++{
++    std::optional<Args> opt = ParseArgs(argc, argv);
++    if (!opt)
++    {
++        fprintf(stderr,
++            "usage: apricorn-oracle run --rom ROM.nds --out trace.txt\n"
++            "       --regions regions.bin [--input input.bin] [--probes probes.bin]\n"
++            "       [--frames N] [--rtc 2010-03-01T09:00:00]\n"
++            "       --input-sha1 HEX --regions-sha1 HEX [--producer NAME]\n");
++        return 64;
++    }
++    Args a = *opt;
++
++    // Pinned RTC. Any change here changes the trace — that's the point.
++    int year, month, day, hour, minute, second;
++    if (sscanf(a.rtc.c_str(), "%d-%d-%dT%d:%d:%d",
++               &year, &month, &day, &hour, &minute, &second) != 6)
++    {
++        fprintf(stderr, "--rtc must be YYYY-MM-DDTHH:MM:SS\n");
++        return 64;
++    }
++
++    std::vector<u8> romdata = ReadFile(a.rom.c_str());
++    std::string rom_sha1 = Sha1Hex(romdata.data(), romdata.size());
++    InputScript input = a.input.empty() ? InputScript{} : ParseInput({ReadFile(a.input.c_str())});
++    std::vector<Region> regions = ParseRegions({ReadFile(a.regions.c_str())});
++    std::vector<Probe> probes = a.probes.empty() ? std::vector<Probe>{} : ParseProbes({ReadFile(a.probes.c_str())});
++
++    // Boot: cart in, reset, pin the RTC, direct boot, go. Defaults all
++    // the way down (FreeBIOS + generated firmware + software renderer)
++    // — the exact configuration whose determinism we depend on.
++    melonDS::NDSArgs nds_args;
++    nds_args.JIT = std::nullopt;
++    // NDS is several megabytes (the memory-timing tables alone are ~4 MB) —
++    // melonDS's frontend heap-allocates it, and so do we.
++    std::unique_ptr<melonDS::NDS> nds(new melonDS::NDS(std::move(nds_args)));
++    nds->SetNDSCart(melonDS::NDSCart::ParseROM(romdata.data(), u32(romdata.size())));
++    nds->Reset();
++    nds->RTC.SetDateTime(year, month, day, hour, minute, second);
++    nds->SetupDirectBoot(a.rom);
++    nds->Start();
++    melonDS::NDS::Current = nds.get();
++
++    FILE* out = fopen(a.out.c_str(), "wb");
++    if (!out) { fprintf(stderr, "cannot write %s\n", a.out.c_str()); return 2; }
++    fprintf(out, "TRACE apricorn %s\n", TRACE_VERSION);
++    fprintf(out, "producer %s\n", a.producer.c_str());
++    fprintf(out, "state-format %s\n", STATE_FORMAT);
++    fprintf(out, "rom-sha1 %s\n", rom_sha1.c_str());
++    fprintf(out, "input-sha1 %s\n", a.input_sha1.c_str());
++    fprintf(out, "regions-sha1 %s\n", a.regions_sha1.c_str());
++    fprintf(out, "frames %u\n", a.frames);
++    fprintf(out, "frame-rate %s\n", FRAME_RATE);
++    fprintf(out, "rtc %s\n", a.rtc.c_str());
++
++    size_t next_probe = 0;
++    u32 seq = 0;
++    for (u32 frame = 0; frame < a.frames; frame++)
++    {
++        // Probes scheduled for this frame run at its boundary, before
++        // input or execution — the machine state of `frame-1` final.
++        while (next_probe < probes.size() && probes[next_probe].frame == frame)
++            RunProbe(*nds, probes[next_probe], seq++, regions, out), next_probe++;
++
++        const InputFrame& in = frame < input.frames.size()
++            ? input.frames[frame] : InputFrame{};
++        nds->SetKeyMask(in.keymask);
++        if (in.touch_down)
++            nds->TouchScreen(in.touch_x, in.touch_y);
++        else
++            nds->ReleaseScreen();
++
++        nds->RunFrame();
++
++        // A game-triggered stop (GBA mode, power-off, bad exception)
++        // ends the trace early — the emulated console is no longer
++        // producing state, and inventing frames would be a lie.
++        if (melonDS::Platform::Stopped())
++        {
++            fprintf(stderr, "machine stopped at frame %u — ending trace\n", frame);
++            fclose(out);
++            return 3;
++        }
++
++        for (const Region& r : regions)
++        {
++            if (r.sample == 0 || frame % r.sample == 0)
++            {
++                std::vector<u8> bytes = ReadRegion(*nds, r);
++                fprintf(out, "F %u %s %s\n", frame, r.name.c_str(),
++                        Sha1Hex(bytes.data(), bytes.size()).c_str());
++            }
++        }
++    }
++    // Probes scheduled at or past the last frame still run.
++    while (next_probe < probes.size())
++        RunProbe(*nds, probes[next_probe], seq++, regions, out), next_probe++;
++
++    fclose(out);
++    return 0;
++}
+\ No newline at end of file
+diff --git a/src/apricorn-platform.cpp b/src/apricorn-platform.cpp
+new file mode 100644
+index 0000000..5b20545
+--- /dev/null
++++ b/src/apricorn-platform.cpp
+@@ -0,0 +1,361 @@
++/*
++    apricorn-platform — headless implementation of melonDS's Platform
++    interface for the apricorn oracle.
++
++    melonDS's core calls into the `melonDS::Platform::` namespace for
++    everything host-side (files, logging, threads, mic, wifi packets,
++    save writes), but every real implementation lives in the Qt/SDL
++    frontend — which the core-only oracle build deliberately excludes.
++    This file supplies the headless versions: real stdio for files,
++    stderr for logs, real C++11 threading primitives (the core links
++    against them even when it never spawns a thread in this
++    configuration), and deterministic no-op stubs for everything
++    that would reach the outside world — no host time, no network,
++    no devices, nothing that could make two runs differ.
++*/
++
++#include "Platform.h"
++
++#include <atomic>
++#include <cstdint>
++#include <cstdarg>
++#include <cstdio>
++#include <cstring>
++#include <chrono>
++#include <condition_variable>
++#include <mutex>
++#include <thread>
++
++namespace melonDS
++{
++namespace Platform
++{
++
++// ----- stop signaling ------------------------------------------------------
++
++static std::atomic<StopReason> gStopReason{StopReason(-1)};
++
++void SignalStop(StopReason reason, void* userdata)
++{
++    (void)userdata;
++    gStopReason.store(reason);
++}
++
++bool Stopped()
++{
++    return gStopReason.load() != StopReason(-1);
++}
++
++// ----- files ----------------------------------------------------------------
++
++struct FileHandle { FILE* file; };
++
++// Maps the Platform FileMode flags onto an fopen mode string (without the
++// 'b'; the caller appends it unless Text mode was requested).
++static const char* ModeString(FileMode mode)
++{
++    bool read = mode & FileMode::Read;
++    bool write = mode & FileMode::Write;
++
++    if (read && write)  return (mode & FileMode::NoCreate) ? "r+" : "w+";
++    if (write)
++    {
++        if (mode & FileMode::Append)   return "a";
++        if (mode & FileMode::Preserve) return "r+";
++        return "w";
++    }
++    return "r";
++}
++
++static FILE* OpenImpl(const std::string& path, FileMode mode)
++{
++    bool read = mode & FileMode::Read;
++    bool write = mode & FileMode::Write;
++    if (!read && !write) return nullptr;
++
++    char m[8];
++    int i = 0;
++    const char* s = ModeString(mode);
++    for (; s[i]; i++) m[i] = s[i];
++    if (!(mode & FileMode::Text)) { m[i++] = 'b'; }
++    m[i] = '\0';
++
++    if ((mode & FileMode::NoCreate) && !(mode & FileMode::Read))
++    {
++        FILE* probe = fopen(path.c_str(), "rb");
++        if (!probe) return nullptr;
++        fclose(probe);
++    }
++
++    return fopen(path.c_str(), m);
++}
++
++std::string GetLocalFilePath(const std::string& filename)
++{
++    // Headless: no per-user config directory — paths are taken as given.
++    return filename;
++}
++
++FileHandle* OpenFile(const std::string& path, FileMode mode)
++{
++    FILE* f = OpenImpl(path, mode);
++    if (!f) return nullptr;
++    return new FileHandle{f};
++}
++
++// The oracle has no local-file concept (no melonDS.ini, no BIOS dumps);
++// local and plain files are the same thing.
++FileHandle* OpenLocalFile(const std::string& path, FileMode mode)
++{
++    return OpenFile(path, mode);
++}
++
++static bool ExistsImpl(const std::string& name)
++{
++    FILE* f = fopen(name.c_str(), "rb");
++    if (!f) return false;
++    fclose(f);
++    return true;
++}
++
++bool FileExists(const std::string& name) { return ExistsImpl(name); }
++bool LocalFileExists(const std::string& name) { return ExistsImpl(name); }
++
++bool CheckFileWritable(const std::string& filepath) { return OpenImpl(filepath, FileMode::ReadWrite) != nullptr; }
++bool CheckLocalFileWritable(const std::string& filepath) { return CheckFileWritable(filepath); }
++
++bool CloseFile(FileHandle* file)
++{
++    if (!file) return false;
++    bool ok = fclose(file->file) == 0;
++    delete file;
++    return ok;
++}
++
++bool IsEndOfFile(FileHandle* file) { return file && feof(file->file); }
++
++bool FileReadLine(char* str, int count, FileHandle* file)
++{
++    return file && fgets(str, count, file->file) != nullptr;
++}
++
++u64 FilePosition(FileHandle* file) { return file ? u64(ftell(file->file)) : 0; }
++
++bool FileSeek(FileHandle* file, s64 offset, FileSeekOrigin origin)
++{
++    if (!file) return false;
++    int whence = origin == FileSeekOrigin::Start ? SEEK_SET
++                : origin == FileSeekOrigin::Current ? SEEK_CUR : SEEK_END;
++    // ftell/fseek are long (32-bit on Windows); 64-bit files go through
++    // the long long variants when the offset can't round-trip.
++    if (offset >= INT32_MIN && offset <= INT32_MAX)
++        return fseek(file->file, long(offset), whence) == 0;
++    return _fseeki64(file->file, offset, whence) == 0;
++}
++
++void FileRewind(FileHandle* file) { if (file) rewind(file->file); }
++
++u64 FileRead(void* data, u64 size, u64 count, FileHandle* file)
++{
++    return file ? u64(fread(data, size_t(size), size_t(count), file->file)) : 0;
++}
++
++bool FileFlush(FileHandle* file) { return file && fflush(file->file) == 0; }
++
++u64 FileWrite(const void* data, u64 size, u64 count, FileHandle* file)
++{
++    return file ? u64(fwrite(data, size_t(size), size_t(count), file->file)) : 0;
++}
++
++u64 FileWriteFormatted(FileHandle* file, const char* fmt, ...)
++{
++    if (!file) return 0;
++    va_list args;
++    va_start(args, fmt);
++    int written = vfprintf(file->file, fmt, args);
++    va_end(args);
++    return written < 0 ? 0 : u64(written);
++}
++
++u64 FileLength(FileHandle* file)
++{
++    if (!file) return 0;
++    long old = ftell(file->file);
++    fseek(file->file, 0, SEEK_END);
++    long len = ftell(file->file);
++    fseek(file->file, old, SEEK_SET);
++    return len < 0 ? 0 : u64(len);
++}
++
++// ----- logging ---------------------------------------------------------------
++
++// Logs go to stderr; they never touch the trace on stdout-bound files.
++void Log(LogLevel level, const char* fmt, ...)
++{
++    const char* prefix = level == LogLevel::Debug ? " debug: "
++                       : level == LogLevel::Info  ? " "
++                       : level == LogLevel::Warn  ? " warning: "
++                                                  : " error: ";
++    fputs("melonDS", stderr);
++    fputs(prefix, stderr);
++    va_list args;
++    va_start(args, fmt);
++    vfprintf(stderr, fmt, args);
++    va_end(args);
++    fputc('\n', stderr);
++}
++
++// ----- threads / sync ---------------------------------------------------------
++
++struct Thread { std::thread thread; };
++struct Mutex { std::mutex mutex; };
++struct Semaphore
++{
++    std::mutex mutex;
++    std::condition_variable cond;
++    int count = 0;
++};
++
++Thread* Thread_Create(std::function<void()> func)
++{
++    try
++    {
++        return new Thread{std::thread(func)};
++    }
++    catch (...)
++    {
++        return nullptr;
++    }
++}
++
++void Thread_Free(Thread* thread)
++{
++    if (thread)
++    {
++        if (thread->thread.joinable()) thread->thread.join();
++        delete thread;
++    }
++}
++
++void Thread_Wait(Thread* thread)
++{
++    if (thread && thread->thread.joinable()) thread->thread.join();
++}
++
++Mutex* Mutex_Create() { try { return new Mutex; } catch (...) { return nullptr; } }
++void Mutex_Free(Mutex* mutex) { delete mutex; }
++void Mutex_Lock(Mutex* mutex) { if (mutex) mutex->mutex.lock(); }
++void Mutex_Unlock(Mutex* mutex) { if (mutex) mutex->mutex.unlock(); }
++bool Mutex_TryLock(Mutex* mutex) { return mutex && mutex->mutex.try_lock(); }
++
++Semaphore* Semaphore_Create() { try { return new Semaphore; } catch (...) { return nullptr; } }
++void Semaphore_Free(Semaphore* sema) { delete sema; }
++void Semaphore_Reset(Semaphore* sema) { if (!sema) return; std::lock_guard<std::mutex> lock(sema->mutex); sema->count = 0; }
++void Semaphore_Wait(Semaphore* sema)
++{
++    if (!sema) return;
++    std::unique_lock<std::mutex> lock(sema->mutex);
++    sema->cond.wait(lock, [sema] { return sema->count > 0; });
++    sema->count--;
++}
++bool Semaphore_TryWait(Semaphore* sema, int timeout_ms)
++{
++    if (!sema) return false;
++    std::unique_lock<std::mutex> lock(sema->mutex);
++    if (timeout_ms > 0)
++        if (!sema->cond.wait_for(lock, std::chrono::milliseconds(timeout_ms), [sema] { return sema->count > 0; }))
++            return false;
++    if (sema->count <= 0) return false;
++    sema->count--;
++    return true;
++}
++void Semaphore_Post(Semaphore* sema, int count)
++{
++    if (!sema) return;
++    std::lock_guard<std::mutex> lock(sema->mutex);
++    sema->count += count;
++    sema->cond.notify_all();
++}
++
++void Sleep(u64 usecs)
++{
++    std::this_thread::sleep_for(std::chrono::microseconds(usecs));
++}
++
++// Host wall-clock — never used in the oracle's execution path (frame-indexed
++// only), but provided so the core links if a debug path ever asks.
++static u64 Ticks()
++{
++    return u64(std::chrono::steady_clock::now().time_since_epoch().count());
++}
++u64 GetMSCount() { return Ticks() / 1000000; }
++u64 GetUSCount() { return Ticks() / 1000; }
++
++// ----- persistence callbacks ---------------------------------------------------
++// The oracle is read-only: save/firmware data lives in emulated memory for
++// the duration of the run and is discarded. No host writes, ever.
++
++void WriteNDSSave(const u8* savedata, u32 savelen, u32 writeoffset, u32 writelen, void* userdata)
++{ (void)savedata; (void)savelen; (void)writeoffset; (void)writelen; (void)userdata; }
++
++void WriteGBASave(const u8* savedata, u32 savelen, u32 writeoffset, u32 writelen, void* userdata)
++{ (void)savedata; (void)savelen; (void)writeoffset; (void)writelen; (void)userdata; }
++
++void WriteFirmware(const Firmware& firmware, u32 writeoffset, u32 writelen, void* userdata)
++{ (void)firmware; (void)writeoffset; (void)writelen; (void)userdata; }
++
++void WriteDateTime(int year, int month, int day, int hour, int minute, int second, void* userdata)
++{ (void)year; (void)month; (void)day; (void)hour; (void)minute; (void)second; (void)userdata; }
++
++// ----- local multiplayer / network -----------------------------------------------
++// No wifi, no link partner: every packet op says "nothing there", which is
++// what the emulated wifi stack already handles for a solo console.
++
++void MP_Begin(void* userdata) { (void)userdata; }
++void MP_End(void* userdata) { (void)userdata; }
++int MP_SendPacket(u8* data, int len, u64 timestamp, void* userdata) { (void)data; (void)len; (void)timestamp; (void)userdata; return 0; }
++int MP_RecvPacket(u8* data, u64* timestamp, void* userdata) { (void)data; (void)timestamp; (void)userdata; return 0; }
++int MP_SendCmd(u8* data, int len, u64 timestamp, void* userdata) { (void)data; (void)len; (void)timestamp; (void)userdata; return 0; }
++int MP_SendReply(u8* data, int len, u64 timestamp, u16 aid, void* userdata) { (void)data; (void)len; (void)timestamp; (void)aid; (void)userdata; return 0; }
++int MP_SendAck(u8* data, int len, u64 timestamp, void* userdata) { (void)data; (void)len; (void)timestamp; (void)userdata; return 0; }
++int MP_RecvHostPacket(u8* data, u64* timestamp, void* userdata) { (void)data; (void)timestamp; (void)userdata; return 0; }
++u16 MP_RecvReplies(u8* data, u64 timestamp, u16 aidmask, void* userdata) { (void)data; (void)timestamp; (void)aidmask; (void)userdata; return 0; }
++
++int Net_SendPacket(u8* data, int len, void* userdata) { (void)data; (void)len; (void)userdata; return 0; }
++int Net_RecvPacket(u8* data, void* userdata) { (void)data; (void)userdata; return 0; }
++
++// ----- camera / mic / AAC / addons ------------------------------------------------
++// All deterministic "absent device" answers: no frame, silence, no decoder.
++
++void Camera_Start(int num, void* userdata) { (void)num; (void)userdata; }
++void Camera_Stop(int num, void* userdata) { (void)num; (void)userdata; }
++void Camera_CaptureFrame(int num, u32* frame, int width, int height, bool yuv, void* userdata)
++{
++    (void)num; (void)frame; (void)width; (void)height; (void)yuv; (void)userdata;
++}
++
++void Mic_Start(void* userdata) { (void)userdata; }
++void Mic_Stop(void* userdata) { (void)userdata; }
++int Mic_ReadInput(s16* data, int maxlength, void* userdata)
++{
++    (void)data; (void)maxlength; (void)userdata;
++    return 0; // silence — a fixed number of zero samples, never host audio
++}
++
++AACDecoder* AAC_Init() { return nullptr; }
++void AAC_DeInit(AACDecoder* dec) { (void)dec; }
++bool AAC_Configure(AACDecoder* dec, int frequency, int channels) { (void)dec; (void)frequency; (void)channels; return false; }
++bool AAC_DecodeFrame(AACDecoder* dec, const void* input, int inputlen, void* output, int outputlen)
++{ (void)dec; (void)input; (void)inputlen; (void)output; (void)outputlen; return false; }
++
++bool Addon_KeyDown(KeyType type, void* userdata) { (void)type; (void)userdata; return false; }
++void Addon_RumbleStart(u32 len, void* userdata) { (void)len; (void)userdata; }
++void Addon_RumbleStop(void* userdata) { (void)userdata; }
++float Addon_MotionQuery(MotionQueryType type, void* userdata) { (void)type; (void)userdata; return 0.f; }
++
++DynamicLibrary* DynamicLibrary_Load(const char* lib) { (void)lib; return nullptr; }
++void DynamicLibrary_Unload(DynamicLibrary* lib) { (void)lib; }
++void* DynamicLibrary_LoadFunction(DynamicLibrary* lib, const char* name) { (void)lib; (void)name; return nullptr; }
++
++}
++}
+\ No newline at end of file
