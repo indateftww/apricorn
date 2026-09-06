@@ -37,6 +37,7 @@
 pub mod arm;
 pub mod diff;
 pub mod input;
+pub mod oracle;
 pub mod pins;
 pub mod regions;
 pub mod trace;
