@@ -34,10 +34,10 @@
 //! * **Palette** (NCLR) — colors converted BGR555 → RGBA8 with the
 //!   SDK's 5→8-bit expansion (`v << 3 | v >> 2`). A PMCP table is
 //!   *not* a decompression: per pret's `NNS_G2dLoadPaletteEx` it is a
-//!   partial-load patch — stored 16-color sub-palette `i` loads into
-//!   VRAM sub-palette `indices[i]` of an already-loaded palette — so
-//!   the chunk keeps the patch indices verbatim instead of inventing
-//!   a materialization.
+//!   partial-load patch — VRAM sub-palette `i` reuses the stored
+//!   16-color sub-palette `indices[i]` of an already-loaded palette —
+//!   so the chunk keeps the patch indices verbatim instead of
+//!   inventing a materialization.
 //! * **Screen** (NSCR) — dimensions plus the raw map entries; a text
 //!   screen's u16 entries are already the engine's native format, so
 //!   only the dims/mode metadata is added.
@@ -279,8 +279,8 @@ pub fn encode_tiles(ncgr: &Ncgr<'_>) -> Vec<u8> {
 /// [u16 × pmcp_count]     PMCP patch indices, slot order
 /// ```
 ///
-/// The PMCP indices are the partial-load patch table: stored
-/// sub-palette `i` loads into VRAM sub-palette `pmcp[i]` of an
+/// The PMCP indices are the partial-load patch table, in slot order:
+/// VRAM sub-palette `i` reuses the stored sub-palette `pmcp[i]` of an
 /// already-loaded palette (see the module docs). The chunk keeps them
 /// verbatim; the engine applies the patch at load time.
 #[must_use]
@@ -755,8 +755,9 @@ impl Palette {
         &self.colors
     }
 
-    /// The PMCP patch table: stored sub-palette `i` loads into VRAM
-    /// sub-palette `pmcp()[i]` (empty when the source had no PMCP).
+    /// The PMCP patch table, in slot order: VRAM sub-palette `i`
+    /// reuses the stored sub-palette `pmcp()[i]` (empty when the
+    /// source had no PMCP).
     #[must_use]
     pub fn pmcp(&self) -> &[u16] {
         &self.pmcp

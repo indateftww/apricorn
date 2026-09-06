@@ -40,6 +40,13 @@ impl AssetId {
     pub fn index(self) -> usize {
         self.0 as usize
     }
+
+    /// The handle at `index` — the inverse of [`AssetId::index`], used
+    /// by the store to hand out sequential handles in load order.
+    #[must_use]
+    pub fn from_index(index: usize) -> Self {
+        Self(index as u32)
+    }
 }
 
 /// Which engine drives which LCD — `GX_SetDispSelect` (`reg_GX_POWCNT`

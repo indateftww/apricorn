@@ -13,6 +13,7 @@
 #![deny(missing_docs)]
 
 pub mod app;
+pub mod assets;
 pub mod cache;
 pub mod formats;
 pub mod frame;
