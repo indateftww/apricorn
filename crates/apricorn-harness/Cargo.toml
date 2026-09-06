@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 apricorn-core.workspace = true
+sha1 = "0.10"
 
 [lints]
 workspace = true

@@ -31,8 +31,8 @@ same logical visuals. Internals are idiomatic Rust.
    never committed; each developer supplies their own dump (verify SHA1
    `4fcded0e...` per pret's README). Only our code, tooling, and test *traces*
    (hashes, not content) live in git.
-5. **Fixed-timestep, deterministic game loop** (60.0988 fps NDS-timing model)
-   from day one — determinism is what makes behavioral testing possible.
+5. **Fixed-timestep, deterministic game loop** (59.8268 Hz NDS VBlank timing
+   model) from day one — determinism is what makes behavioral testing possible.
 
 ---
 

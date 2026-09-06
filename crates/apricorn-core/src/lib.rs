@@ -20,7 +20,12 @@ pub mod nds;
 ///
 /// Any change to observable game state layout bumps this so the harness can
 /// reject traces produced by a different engine version.
-pub const STATE_FORMAT_VERSION: u32 = 0;
+///
+/// 1 is the first implemented format: the Phase 2 harness trace grammar
+/// (`apricorn-harness::trace`, `docs/equivalence.md`) — the oracle, the
+/// arm-runner, and the engine all emit state-identifying hashes under
+/// this version, and comparators refuse cross-version pairs.
+pub const STATE_FORMAT_VERSION: u32 = 1;
 
 /// A single stepped frame of the headless game.
 ///
@@ -38,9 +43,10 @@ mod tests {
 
     #[test]
     fn state_format_version_is_stable() {
-        // 0 is the pre-implementation sentinel: no trace format exists yet,
-        // so the harness must refuse to compare anything.
-        assert_eq!(STATE_FORMAT_VERSION, 0);
+        // 1 is the Phase 2 harness trace format (see docs/equivalence.md);
+        // the harness gate rejects traces whose state-format differs, so
+        // this number only ever moves deliberately.
+        assert_eq!(STATE_FORMAT_VERSION, 1);
     }
 
     #[test]
