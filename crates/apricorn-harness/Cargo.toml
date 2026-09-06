@@ -18,5 +18,9 @@ path = "src/bin/apricorn-diff.rs"
 name = "arm-runner"
 path = "src/bin/arm-runner.rs"
 
+[[bin]]
+name = "apricorn-replay"
+path = "src/bin/apricorn-replay.rs"
+
 [lints]
 workspace = true

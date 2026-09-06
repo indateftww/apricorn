@@ -23,6 +23,12 @@
 //!   globals) with per-run prologue-hash verification against the loaded
 //!   image; the harness's symbol table, since the decompilation has no
 //!   symbol files.
+//! - [`oracle`] — glue to the patched melonDS binary: compile the harness
+//!   formats to the little-endian blobs it consumes, run it, parse the
+//!   trace it writes back.
+//! - [`replay`] — corpus case loading (`regions.conf` + `input.apin` +
+//!   optional `probes.conf`) and the replay-against-`expected.trace`
+//!   runner behind `apricorn-replay`.
 //! - **diff** — first-divergence comparator over two traces ([`Verdict`]).
 //! - [`arm`] — a test-only ARM9 interpreter (arm-runner) that loads original
 //!   ARM9 code and calls original functions with controlled inputs, the
@@ -40,6 +46,7 @@ pub mod input;
 pub mod oracle;
 pub mod pins;
 pub mod regions;
+pub mod replay;
 pub mod trace;
 
 use std::fmt;

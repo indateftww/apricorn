@@ -25,6 +25,9 @@ Cargo.lock.bak
 # Traces contain state hashes only, but raw oracle dumps may embed game data
 traces/
 *.trace
+# ...except the corpus's committed expected traces: hashes only, the
+# regression definition itself (verified: header + F/C records)
+!corpus/**/expected.trace
 *.state-dump
 
 # --- IDE / OS ---

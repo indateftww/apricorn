@@ -132,10 +132,34 @@ C 0 LCRandom r0=0x00001234 r1=0x00000000 r2=0x00000000 r3=0x00000000 state=<sha1
 at that frame; `drift` mismatches are collected as warnings. Exit 0 =
 EQUIVALENT, 1 = diverged, 64 = usage/gate error.
 
-A **corpus case** is a committed directory: `input.apin`,
-`regions.conf`, and the baseline `expected.trace`. Baselines change
-only through the replay runner's deliberate `--update`, reviewed like an
-assertion change. Cases skip silently when the ROM (or oracle binary)
+A **corpus case** is a committed directory:
+
+```text
+corpus/boot-idle/
+  input.apin       # the pinned RTC, the length in frames, the events
+  regions.conf     # what to watch, how often, which bucket
+  probes.conf      # optional: fnprobe cases only
+  expected.trace   # the committed baseline — hashes only
+```
+
+`probes.conf` (when present) schedules function probes, one per line:
+`frame fn [args…]`, where `fn` is a `pins/arm9.tsv` code pin (its
+table entry supplies the address and the Thumb bit) and args are hex
+(`0x…`) or decimal, at most four. Frames must not decrease — probes run
+in file order at their frame's boundary. The first Phase 2 corpus
+case, `boot-idle`, is a pure replay (no probes): 600 frames, no input,
+the pinned-clock boot.
+
+`apricorn-replay [--update] [--rom ROM] <case-dir>` runs a case on the
+oracle and diffs the fresh trace against the case's committed
+`expected.trace` (with the case's own buckets). Exit codes match
+`apricorn-diff`. `--update` regenerates the baseline instead of
+comparing — a deliberate, reviewed act; baselines never change
+implicitly. `scripts/replay.ps1` / `scripts/replay.sh` wrap the whole
+flow (build the bin, run it) and refuse to guess when the ROM or the
+oracle binary is missing.
+
+Cases skip silently when the ROM (or oracle binary)
 is absent, so ROM-less CI stays green — the same convention as
 apricorn-core's `*_hg` tests. The corpus grows with the phases:
 boot-idle (Phase 2), title screen (Phase 3), new-game flow (Phase 4),

@@ -1,0 +1,6 @@
+# apricorn input v1
+# The boot-idle corpus case: no input at all — the game boots and sits
+# at the title screen (DirectBoot, pinned RTC). The RNG states are the
+# first things the boot touches (clock-seeded LCG around frame ~185).
+rtc 2010-03-01T09:00:00
+end 600
