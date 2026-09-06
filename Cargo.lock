@@ -14,6 +14,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "apricorn-gfx"
+version = "0.1.0"
+dependencies = [
+ "apricorn-core",
+ "sha1",
+]
+
+[[package]]
 name = "apricorn-harness"
 version = "0.1.0"
 dependencies = [

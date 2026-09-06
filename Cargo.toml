@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/apricorn-core",
+    "crates/apricorn-gfx",
     "crates/apricorn-tools",
     "crates/apricorn-harness",
     "crates/apricorn-desktop",
