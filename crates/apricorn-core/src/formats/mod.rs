@@ -5,6 +5,7 @@
 //! formats (NCGR, NCLR, NSCR, NCER, NANR, SDAT, …) that later modules
 //! parse.
 
+pub mod btx;
 pub mod nanr;
 pub mod narc;
 pub mod ncer;
@@ -12,6 +13,7 @@ pub mod ncgr;
 pub mod nclr;
 pub mod nscr;
 
+pub use btx::{Btx, BtxPalette, BtxTexture, TexFmt, is_btx};
 pub use nanr::{AnimElement, AnimResult, Nanr, PlayMode, Uaat, is_nanr};
 pub use narc::{Narc, is_narc};
 pub use ncer::{BoundingBox, Cell, CellMapping, Ncer, Ucat, VramTransfer, is_ncer};
@@ -131,11 +133,7 @@ pub(crate) fn nitro_sections(
 ///
 /// `off`/`size` locate the section (header included), as produced by
 /// [`nitro_sections`].
-pub(crate) fn nitro_labels(
-    data: &[u8],
-    off: usize,
-    size: usize,
-) -> Result<Vec<&str>, NdsError> {
+pub(crate) fn nitro_labels(data: &[u8], off: usize, size: usize) -> Result<Vec<&str>, NdsError> {
     let body = data.get(off + 8..off + size).ok_or(NdsError::Truncated {
         what: "LBAL section body",
         need: off + size,

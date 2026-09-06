@@ -4,13 +4,13 @@
 //! facts, and check SHA-1 and CRCs.
 //! `list <rom>` — print every NitroFS file with its FAT id.
 //! `narc <rom> <path>` — list the members of a NitroFS NARC archive.
-//! `gfx <rom> <path> [id]` — summarize the NCGR/NCLR/NSCR/NCER/NANR
+//! `gfx <rom> <path> [id]` — summarize the NCGR/NCLR/NSCR/NCER/NANR/BTX
 //! members of a NARC (one line each), or dump every field of member
-//! `id`.
+//! `id`. A path that is itself a BTX (a loose `.nsbtx`) dumps directly.
 
 use std::process::ExitCode;
 
-use apricorn_core::formats::{Nanr, Narc, Ncer, Ncgr, Nclr, Nscr};
+use apricorn_core::formats::{Btx, Nanr, Narc, Ncer, Ncgr, Nclr, Nscr, is_btx};
 use apricorn_core::nds::NdsRom;
 use sha1::{Digest as _, Sha1};
 
@@ -220,9 +220,52 @@ fn narc(path: &str, member_path: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Dumps one BTX archive in full.
+fn dump_btx(path: &str, btx: &Btx<'_>) {
+    println!("{path}: BTX");
+    println!(
+        "  textures      {} (data {} bytes){}",
+        btx.texture_count(),
+        btx.texture_data().len(),
+        if btx.uses_pltt4() { " PLTT4" } else { "" }
+    );
+    println!(
+        "  palettes      {} (data {} bytes)",
+        btx.palette_count(),
+        btx.palette_data().len()
+    );
+    for tex in btx.textures() {
+        println!(
+            "  tex {:?}   {}x{} {:?}  off 0x{:X}  data {} of {} bytes{}",
+            tex.name(),
+            tex.width(),
+            tex.height(),
+            tex.fmt(),
+            tex.offset(),
+            tex.data().len(),
+            tex.declared_size(),
+            if tex.color0_transparent() {
+                "  color0-transp"
+            } else {
+                ""
+            }
+        );
+    }
+    for pltt in btx.palettes() {
+        println!(
+            "  pltt {:?}  off 0x{:X}  word1 {}  data {} bytes",
+            pltt.name(),
+            pltt.offset(),
+            pltt.word1(),
+            pltt.data().len()
+        );
+    }
+}
+
 /// Summarizes the graphics members of a NARC, or dumps every field of
-/// one member. Members that are none of NCGR/NCLR/NSCR/NCER/NANR print
-/// as a bare magic.
+/// one member. A path that is itself a BTX (a loose `.nsbtx`) dumps
+/// directly. Members that are none of the known formats print as a
+/// bare magic.
 fn gfx(path: &str, member_path: &str, detail_id: Option<usize>) -> ExitCode {
     let data = match std::fs::read(path) {
         Ok(data) => data,
@@ -245,6 +288,19 @@ fn gfx(path: &str, member_path: &str, detail_id: Option<usize>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // A loose NSBTX (e.g. data/dun_sea.nsbtx) is dumped directly; member
+    // ids only apply to NARC archives.
+    if is_btx(bytes) {
+        let btx = match Btx::parse(bytes) {
+            Ok(btx) => btx,
+            Err(e) => {
+                eprintln!("gfx: {member_path}: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        dump_btx(member_path, &btx);
+        return ExitCode::SUCCESS;
+    }
     let narc = match Narc::parse(bytes) {
         Ok(narc) => narc,
         Err(e) => {
@@ -420,6 +476,8 @@ fn gfx(path: &str, member_path: &str, detail_id: Option<usize>) -> ExitCode {
                     );
                 }
             }
+        } else if let Ok(btx) = Btx::parse(member) {
+            dump_btx(&format!("{member_path} member {id}"), &btx);
         } else {
             eprintln!("gfx: {member_path} member {id} is not a NCGR/NCLR/NSCR");
             return ExitCode::FAILURE;
@@ -479,6 +537,13 @@ fn gfx(path: &str, member_path: &str, detail_id: Option<usize>) -> ExitCode {
                 nanr.sequence_count(),
                 nanr.total_frames(),
                 if nanr.uaat().is_some() { "  UAAT" } else { "" }
+            );
+        } else if let Ok(btx) = Btx::parse(member) {
+            println!(
+                "{id:4}  {len:8}  BTX   {} tex  {} pal{}",
+                btx.texture_count(),
+                btx.palette_count(),
+                if btx.uses_pltt4() { "  PLTT4" } else { "" }
             );
         } else {
             println!("{id:4}  {len:8}  (not a BG graphics member)");
