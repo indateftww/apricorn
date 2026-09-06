@@ -11,8 +11,12 @@
 //! functions of the frame index and the input, so replaying a frame
 //! range with the same inputs reproduces the same logical frames.
 
+use crate::assets::AssetStore;
 use crate::frame::LogicalFrame;
 use crate::input::Input;
+
+pub mod intro_copyright;
+pub mod title_screen;
 
 /// What a [`BootChain`] does after the current app's tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +52,37 @@ pub trait App {
 
     /// Whether this app has finished and the chain should advance.
     fn next(&self) -> ChainNext;
+}
+
+/// The Phase 3 boot chain: the intro's copyright beat, then the
+/// title screen, cycling forever (the title's timeout exits back to
+/// the intro, as pret's `TITLESCREEN_EXIT_TIMEOUT` does).
+///
+/// Both factories share `store` (an `Arc<Mutex<…>>`, since the
+/// presenter renders from the store while the chain constructs the
+/// next app at an advance) and load their members fresh on every
+/// construction, so a cycle is a true reset of both state and
+/// handles. A load failure panics: the store only opens the
+/// SHA-1-pinned dump the asset tables are valid for, so a broken
+/// member is a broken table, not a runtime condition.
+#[must_use]
+pub fn boot_chain(store: std::sync::Arc<std::sync::Mutex<AssetStore>>) -> BootChain {
+    let intro = std::sync::Arc::clone(&store);
+    let title = std::sync::Arc::clone(&store);
+    BootChain::new(vec![
+        Box::new(move || {
+            Box::new(
+                intro_copyright::IntroCopyright::load(&intro)
+                    .expect("the pinned ROM's copyright-beat members load"),
+            )
+        }),
+        Box::new(move || {
+            Box::new(
+                title_screen::TitleScreen::load(&title)
+                    .expect("the pinned ROM's title-screen members load"),
+            )
+        }),
+    ])
 }
 
 /// The boot-order runner: intro → title → (on timeout) back to intro.
