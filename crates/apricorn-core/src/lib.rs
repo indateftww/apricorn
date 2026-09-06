@@ -12,6 +12,8 @@
 
 #![deny(missing_docs)]
 
+pub mod nds;
+
 /// Semantic version of the engine's state-machine / trace format.
 ///
 /// Any change to observable game state layout bumps this so the harness can
