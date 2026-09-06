@@ -12,8 +12,11 @@
 
 #![deny(missing_docs)]
 
+pub mod app;
 pub mod cache;
 pub mod formats;
+pub mod frame;
+pub mod input;
 pub mod nds;
 
 /// Semantic version of the engine's state-machine / trace format.
@@ -27,10 +30,14 @@ pub mod nds;
 /// this version, and comparators refuse cross-version pairs.
 pub const STATE_FORMAT_VERSION: u32 = 1;
 
-/// A single stepped frame of the headless game.
+/// A single stepped frame of the headless game — the per-tick token
+/// the [`app::App`] trait consumes.
 ///
-/// Placeholder for the Phase 3 game loop. The engine advances in logical
-/// NDS frames (approx. 59.8268 Hz per screen refresh; fixed-timestep).
+/// The engine advances in logical NDS frames (approx. 59.8268 Hz per
+/// screen refresh; fixed-timestep): every [`Frame`] passed to
+/// `App::tick` carries the zero-based frame index since boot, and the
+/// app's tick is a pure function of that index and the input, so a
+/// frame range replays deterministically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Frame {
     /// Zero-based index of this frame since boot.
