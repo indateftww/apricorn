@@ -9,10 +9,13 @@
 //! `id`. A path that is itself a BTX (a loose `.nsbtx`) dumps directly.
 //! `msg <rom> <path> [id]` — summarize the MAT message banks of a NARC
 //! (one line each), or dump every message of bank `id` as raw code units.
+//! `sdat <rom> <path> [list]` — summarize an SDAT sound archive (list
+//! counts, file census), or dump every SEQ entry with its label and
+//! playback parameters.
 
 use std::process::ExitCode;
 
-use apricorn_core::formats::{Btx, MsgBank, Nanr, Narc, Ncer, Ncgr, Nclr, Nscr, is_btx};
+use apricorn_core::formats::{Btx, MsgBank, Nanr, Narc, Ncer, Ncgr, Nclr, Nscr, Sdat, is_btx};
 use apricorn_core::nds::NdsRom;
 use sha1::{Digest as _, Sha1};
 
@@ -40,6 +43,8 @@ fn main() -> ExitCode {
                 return msg(&args[1], &args[2], Some(id));
             }
         }
+        3 if args[0] == "sdat" => return sdat(&args[1], &args[2], false),
+        4 if args[0] == "sdat" && args[3] == "list" => return sdat(&args[1], &args[2], true),
         _ => {}
     }
     println!("apricorn-tools — ROM and asset pipeline (PLAN.md Phase 1)");
@@ -48,6 +53,7 @@ fn main() -> ExitCode {
     println!("       apricorn-tools narc <rom.nds> <nitrofs-path>");
     println!("       apricorn-tools gfx <rom.nds> <nitrofs-path> [member-id]");
     println!("       apricorn-tools msg <rom.nds> <nitrofs-path> [bank-id]");
+    println!("       apricorn-tools sdat <rom.nds> <nitrofs-path> [list]");
     ExitCode::from(64)
 }
 
@@ -301,6 +307,141 @@ fn msg(path: &str, member_path: &str, detail_id: Option<usize>) -> ExitCode {
                 key = bank.key()
             ),
             Err(e) => println!("{id:4}  {len:8}  (not a MAT: {e})", len = member.len()),
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// Summarizes one SDAT sound archive: file census by magic, then entry
+/// and present-record counts per list (a named SYMB label is exactly a
+/// present INFO record, so "present" is also "named"). With `list`,
+/// dumps every present SEQ entry with its label and playback parameters.
+/// STRMPLAYER records are structural only and never listed.
+fn sdat(path: &str, member_path: &str, list: bool) -> ExitCode {
+    let data = match std::fs::read(path) {
+        Ok(data) => data,
+        Err(e) => {
+            eprintln!("sdat: cannot read {path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let rom = match parse(path, &data) {
+        Ok(rom) => rom,
+        Err(e) => {
+            eprintln!("sdat: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let bytes = match rom.file_by_path(member_path) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            eprintln!("sdat: no NitroFS file named {member_path}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let sdat = match Sdat::parse(bytes) {
+        Ok(sdat) => sdat,
+        Err(e) => {
+            eprintln!("sdat: {member_path}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    println!(
+        "{member_path}: SDAT, {} bytes, {} files",
+        bytes.len(),
+        sdat.file_count()
+    );
+    let mut sseq = 0usize;
+    let mut sbnk = 0usize;
+    let mut swar = 0usize;
+    let mut file_bytes = 0usize;
+    for id in 0..sdat.file_count() {
+        if let Some(file) = sdat.file(id) {
+            file_bytes += file.len();
+            match &file[0..4] {
+                b"SSEQ" => sseq += 1,
+                b"SBNK" => sbnk += 1,
+                b"SWAR" => swar += 1,
+                _ => {}
+            }
+        }
+    }
+    println!("  files     {sseq} SSEQ, {sbnk} SBNK, {swar} SWAR ({file_bytes} bytes)");
+    println!(
+        "  symbols   {}",
+        if sdat.has_symbols() {
+            "SYMB block"
+        } else {
+            "none (entry ids only)"
+        }
+    );
+    let print_list = |name: &str, count: usize, present: usize| {
+        println!("  {name:8}  {count:5} entries, {present:4} present");
+    };
+    print_list(
+        "seq",
+        sdat.seq_count(),
+        (0..sdat.seq_count())
+            .filter(|&i| sdat.seq(i).is_some())
+            .count(),
+    );
+    print_list(
+        "seqArc",
+        sdat.seq_arc_count(),
+        (0..sdat.seq_arc_count())
+            .filter(|&i| sdat.seq_arc(i).is_some())
+            .count(),
+    );
+    print_list(
+        "bank",
+        sdat.bank_count(),
+        (0..sdat.bank_count())
+            .filter(|&i| sdat.bank(i).is_some())
+            .count(),
+    );
+    print_list(
+        "waveArc",
+        sdat.wave_arc_count(),
+        (0..sdat.wave_arc_count())
+            .filter(|&i| sdat.wave_arc(i).is_some())
+            .count(),
+    );
+    print_list(
+        "player",
+        sdat.player_count(),
+        (0..sdat.player_count())
+            .filter(|&i| sdat.player(i).is_some())
+            .count(),
+    );
+    print_list(
+        "group",
+        sdat.group_count(),
+        (0..sdat.group_count())
+            .filter(|&i| sdat.group(i).is_some())
+            .count(),
+    );
+    print_list(
+        "strm",
+        sdat.strm_count(),
+        (0..sdat.strm_count())
+            .filter(|&i| sdat.strm(i).is_some())
+            .count(),
+    );
+
+    if list {
+        for i in 0..sdat.seq_count() {
+            let Some(seq) = sdat.seq(i) else { continue };
+            println!(
+                "seq {i:5}  {:<24}  file {:5}  bank {:4}  vol {:3}  pri {:3}/{:3}  player {}",
+                sdat.seq_name(i).unwrap_or("-"),
+                seq.file_id,
+                seq.bank,
+                seq.volume,
+                seq.channel_priority,
+                seq.player_priority,
+                seq.player
+            );
         }
     }
     ExitCode::SUCCESS

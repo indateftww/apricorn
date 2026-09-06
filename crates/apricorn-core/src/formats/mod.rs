@@ -13,6 +13,7 @@ pub mod ncer;
 pub mod ncgr;
 pub mod nclr;
 pub mod nscr;
+pub mod sdat;
 
 pub use btx::{Btx, BtxPalette, BtxTexture, TexFmt, is_btx};
 pub use msg::{EOS, MsgBank};
@@ -22,6 +23,10 @@ pub use ncer::{BoundingBox, Cell, CellMapping, Ncer, Ucat, VramTransfer, is_ncer
 pub use ncgr::{CharMapping, Ncgr, is_ncgr};
 pub use nclr::{Nclr, Pmcp, is_nclr};
 pub use nscr::{Nscr, is_nscr};
+pub use sdat::{
+    BankInfo, GroupItem, GroupItemKind, PlayerInfo, Sdat, SeqArcInfo, SseqInfo, StrmInfo, SwarInfo,
+    is_sdat,
+};
 
 use crate::nds::{NdsError, u16le, u32le};
 
