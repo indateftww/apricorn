@@ -38,6 +38,13 @@ Note the ARM9/ARM7 *size* fields at 0x2C/0x3C — easy to miss, and without
 them the overlay-table offset (0xBE400) doesn't reconcile with the ARM9 end
 (0x4000 + 0xBA314 = 0xBE314; 0xEC of alignment padding follows).
 
+The ARM9 *size* is the **stored** size: the binary is BLZ "compressed
+static" (pret's `main_lz`, built by `$(COMPSTATIC) -9 -c -f`) — a
+0x41BA-byte plain head (secure area + crt0 decompression stub) runs
+straight into the BLZ payload and an 8-byte footer giving a
+decompressed size of 0x111EF8. The ARM7 binary is stored plain. See
+`docs/conversion.md`.
+
 ### CRCs
 
 Both use ndstool's `CalcCrc16`: reflected polynomial 0xA001 (normal form

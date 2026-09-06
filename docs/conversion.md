@@ -126,11 +126,17 @@ cache is never mistaken for a complete one.
   through its parser's `to_bytes()` — the round-trip guard; see
   `docs/roundtrip.md`.
 
-## BLZ, the overlay compression
+## BLZ, the ARM9 compression
 
 BLZ (backwards LZ77, pret's `tools/compstatic` scheme) is the *only*
 compression anywhere in a HeartGold ROM — no NARC member or loose
-NitroFS file is LZ77-10 compressed, and arm9 itself is stored plain.
+NitroFS file is LZ77-10 compressed. It compresses both the overlays
+and the ARM9 binary itself, which pret builds as `main_lz` via
+`$(COMPSTATIC) -9 -c -f`: a "compressed static" image whose plain
+head (0x41BA bytes — the secure area plus the crt0 stub that
+decompresses the rest at load time) runs straight into the payload,
+with decompressed size 0x111EF8. The ROM header's `arm9.size`
+(0xBA314) is the *stored* size.
 A stored image of `L` bytes ends with an 8-byte footer:
 
 ```text

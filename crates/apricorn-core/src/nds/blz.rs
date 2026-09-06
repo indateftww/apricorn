@@ -2,10 +2,13 @@
 //!
 //! HeartGold's 127 compressed overlays (every one except 35 and 124) are
 //! BLZ-compressed by pret's `tools/compstatic/compress.c`, which builds
-//! the retail overlay table byte-identically. arm9 itself is stored
-//! plain — retail never ran compstatic's `-9` static-module step, so BLZ
-//! is the *only* compression anywhere in a HeartGold ROM (no NARC member
-//! or loose NitroFS file is LZ77-10 compressed).
+//! the retail overlay table byte-identically. The ARM9 binary itself is
+//! compressed the same way: pret's Makefile builds `main_lz` via
+//! `$(COMPSTATIC) -9 -c -f`, so the stored binary is a "compressed
+//! static" image — a plain head (secure area + the crt0 stub that
+//! decompresses the rest at load time), the BLZ payload, and the same
+//! 8-byte footer (see [`NdsRom::arm9_image`](super::NdsRom::arm9_image)).
+//! No NARC member or loose NitroFS file is LZ77-10 compressed.
 //!
 //! BLZ is LZ77 written backwards: the payload is decoded from its end to
 //! its start while writing the image from its end to its start, so
@@ -43,6 +46,45 @@
 //! See `docs/conversion.md` for the worked retail example.
 
 use super::{NdsError, u32le};
+
+/// The minimum plain head of a "compressed static" image, in bytes.
+///
+/// compstatic's `-9` static-module step never compresses below the
+/// secure area (the first 0x800 bytes of the loaded image), so a footer
+/// whose `srcOff` is smaller than this belongs to an overlay, not a
+/// static main.
+const STATIC_MIN_HEAD: usize = 0x800;
+
+/// Detects a BLZ "compressed static" footer and returns the image's
+/// decompressed size.
+///
+/// The compressed overlays share the BLZ footer layout with the
+/// compressed static main, so the footer alone doesn't identify a
+/// static image; this check also requires the plain head to extend at
+/// least past the secure area ([`STATIC_MIN_HEAD`]) and `tailLen` to be
+/// nonzero, which together hold for pret-built static mains
+/// (HeartGold: head 0x41BA, decompressed 0x111EF8) and fail for every
+/// retail overlay. A binary without such a footer is stored plain.
+///
+/// Detection is cheap and never decodes; the payload is only validated
+/// by [`decompress`], which callers reach with the returned size.
+#[must_use]
+pub fn static_footer(src: &[u8]) -> Option<usize> {
+    const FOOTER: usize = 8;
+    let len = src.len();
+    if len < FOOTER {
+        return None;
+    }
+    let w0 = u32le(src, len - FOOTER).ok()?;
+    let tail_len = u32le(src, len - 4).ok()? as usize;
+    let head = (w0 as usize & 0x00FF_FFFF).min(len);
+    let src_off = len - head;
+    let add_len = (w0 >> 24) as usize;
+    if add_len < FOOTER || src_off < STATIC_MIN_HEAD || tail_len == 0 {
+        return None;
+    }
+    Some(len + tail_len)
+}
 
 /// Decompresses a BLZ image of `raw_size` bytes.
 ///
@@ -148,6 +190,42 @@ mod tests {
     /// Decodes `src` into a hex dump for asserting whole images.
     fn hex(bytes: &[u8]) -> String {
         bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    #[test]
+    fn detects_static_footer() {
+        // A static-main-shaped footer: plain head of 0x800 bytes (the
+        // minimum compstatic leaves plain), footer on top.
+        let len = 0x808;
+        let mut src = vec![0u8; len];
+        // addLen 8 (the footer itself), head length 8.
+        let w0 = (8u32 << 24) | (len - 0x800) as u32;
+        src[len - 8..len - 4].copy_from_slice(&w0.to_le_bytes());
+        src[len - 4..len].copy_from_slice(&0x57BE4u32.to_le_bytes());
+        assert_eq!(static_footer(&src), Some(len + 0x57BE4));
+
+        // A zero tailLen means "no compression" — not a static image.
+        src[len - 4..len].copy_from_slice(&0u32.to_le_bytes());
+        assert_eq!(static_footer(&src), None);
+    }
+
+    #[test]
+    fn rejects_non_static_footers() {
+        // Vector C (plain head of 8 bytes) and overlay 9 (head of 1 byte):
+        // valid overlay images, but too small a head for a static main.
+        let vector_c: &[u8] = &[
+            b'H', b'E', b'A', b'D', b'H', b'E', b'A', b'D', 0x05, 0x50, 0x05, 0x50, 0xC0, b'A',
+            b'B', b'C', b'D', b'E', b'F', b'G', b'H', 0x00, 0x16, 0x00, 0x00, 0x08, 0x02, 0x00,
+            0x00, 0x00,
+        ];
+        assert_eq!(static_footer(vector_c), None);
+        let overlay9: &[u8] = &[
+            0x05, 0x50, 0x09, 0x90, 0x03, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1E, 0x14, 0x00,
+            0x00, 0x08, 0x0C, 0x00, 0x00, 0x00,
+        ];
+        assert_eq!(static_footer(overlay9), None);
+        // No footer at all.
+        assert_eq!(static_footer(&[0u8; 4]), None);
     }
 
     #[test]

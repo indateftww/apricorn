@@ -54,6 +54,20 @@ fn parses_retail_header() {
     // ARM9 binary ends before the overlay table (with alignment padding
     // in between on retail).
     assert!(rom.header.arm9.rom_offset + rom.header.arm9.size <= rom.header.arm9_overlay.offset);
+    // The ARM9 binary is BLZ "compressed static" (pret's `main_lz`): the
+    // header's size field is the *stored* size, and the loaded image is
+    // the decompressed form. It starts with the secure area — trap words
+    // + encrypted bytes, exactly as pret's `_secure_IPKE.s` reproduces
+    // them — and execution enters past it at 0x02000800.
+    assert_eq!(rom.arm9_bytes().len(), rom.header.arm9.size as usize);
+    assert_eq!(rom.header.arm9.size, 0x000B_A314);
+    let image = rom.arm9_image().expect("retail ARM9 must decompress");
+    assert_eq!(image.len(), 0x0011_1EF8);
+    assert_eq!(&image[0..4], &[0xFF, 0xDE, 0xFF, 0xE7]);
+    // The ARM7 binary is stored plain.
+    assert_eq!(rom.arm7_bytes().len(), rom.header.arm7.size as usize);
+    assert_eq!(rom.header.arm9.ram_address, 0x0200_0000);
+    assert_eq!(rom.header.arm9.entry_address, 0x0200_0800);
     assert!(
         rom.header_crc_ok(),
         "header CRC must verify against the retail dump"

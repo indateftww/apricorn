@@ -1,0 +1,35 @@
+# apricorn pin table: ARM9 static main (RAM image after crt0 decompression)
+#
+# ROM: HeartGold (US) retail, SHA-1 4fcded0e2713dc03929845de631d0932ea2b5a37
+# ARM9 image: 0x02000000..0x02111EF8 (decompressed size 0x111EF8),
+#   SHA-1 ad8d4da6bb5c010844dae8260212c86beef565fc
+#
+# Columns (tab-separated): name, mode, address, size, prologue-sha1, discovered-by
+#   mode: arm | thumb | data
+#   prologue-sha1: SHA-1 over the first min(16, size) bytes at the address
+#     (arm/thumb pins always use 16 bytes; a hash of zero bytes marks a .bss
+#     pin whose address lies beyond the image end — the loader zeroes it).
+#   discovered-by: how the pin was located (literal-pool scan of a known
+#     constant, or a cross-reference in pret's labeled lib/asm/nitro.s).
+#
+# The math_util functions were found by scanning for the LCG multiplier
+# 0x41C64E6D / MT multiplier 0x6C078965 / tempering and XOR constants and
+# decoding the surrounding Thumb code; the SDK MATH_* functions carry real
+# addresses in pret's `lib/asm/nitro.s` and were matched by prologue.
+GetLCRNGSeed	thumb	0x0201FD2C	12	0d795357dca88f5e7d5eac5165fcbc4bf15c0d6d	pool 0x41C64E6D @ 0x0201FD60
+SetLCRNGSeed	thumb	0x0201FD38	12	16e30fcd3fecffb3f1e288cf8320ad2e77892d13	pool 0x41C64E6D @ 0x0201FD60
+LCRandom	thumb	0x0201FD44	24	b28876d83b9d9132e7e9bd24cbc86d09b86662f9	pool 0x41C64E6D @ 0x0201FD60
+PRandom	thumb	0x0201FD68	12	90f340e00a6028d193d36e3f1f1ad9a9ce1d258a	pool 0x41C64E6D @ 0x0201FD60
+SetMTRNGSeed	thumb	0x0201FD74	68	d4ed1711ca1e0217e4478d431e1ea2fd11fd5f96	pool 0x6C078965 @ 0x0201FDB4
+MTRandom	thumb	0x0201FDB8	228	ce17f80069aa55d4f539a9335876376faa5437ff	pool 0x9D2C5680 @ 0x0201FEC4
+MonEncryptionLCRNG	thumb	0x0201FF78	32	3a6dec698bf08da2c0c56eb87c638f29dfd6b76d	pool 0x41C64E6D @ 0x0201FF90
+GF_CalcCRC16	thumb	0x0201FF98	24	01f7a18ef3122da7e7ae0e80acc513a15841720c	pool 0x1021 @ 0x0201FFDC
+GF_CRC16Init	thumb	0x0201FFB0	44	432b97af4587ae1aaacb1d7414c25e0b1081d656	pool 0x1021 @ 0x0201FFDC
+MATHi_CRC16InitTable	arm	0x020E3850	76	553db4a96caa6e83b83ce26a51e4bb2946f5a5a8	pret lib/asm/nitro.s:18106
+MATHi_CRC16Update	arm	0x020E38E0	64	1c93412ecaff4f68eb730dfb00e31de9ac7b0296	pret lib/asm/nitro.s:18154
+MATH_CalcCRC16CCITT	arm	0x020E3A2C	44	83820ca806461b962c85e0cebbe7daac1185edfa	pret lib/asm/nitro.s:18269
+sCRC16TablePtr	data	0x021D15A4	4	9069ca78e7450a285173431b3e52c5c25299e473	.bss (past image end; zeroed at load)
+sLCRNG_State	data	0x021D15A8	4	9069ca78e7450a285173431b3e52c5c25299e473	.bss (past image end; zeroed at load)
+sMTRNG_State	data	0x021D15AC	2496	e129f27c5103bc5cc44bcdf0a15e160d445066ff	.bss (past image end; zeroed at load)
+sMTRNG_Cycles	data	0x0210F6CC	4	d9fdbb9a59d3583db32b8c4df493d7630def55bb	pool 0x9908B0DF @ 0x0210F6D4 (init 625)
+sMTRNG_XOR	data	0x0210F6D0	8	21a10abbca5ecd3bf44defab64177d453c892e64	pool 0x9908B0DF @ 0x0210F6D4

@@ -19,6 +19,10 @@
 //!   frame-sampled region hashes and per-function call records.
 //! - **input scripts** (`.apin`) — frame-timed button/stylus scripts,
 //!   executable by both the oracle and the headless engine.
+//! - [`pins`] — the pinned ARM9 addresses (differential targets, watched
+//!   globals) with per-run prologue-hash verification against the loaded
+//!   image; the harness's symbol table, since the decompilation has no
+//!   symbol files.
 //! - **diff** — first-divergence comparator over two traces ([`Verdict`]).
 //! - **arm-runner** — a test-only ARM9 interpreter that loads original
 //!   ARM9 code and calls original functions with controlled inputs, the
@@ -32,6 +36,7 @@
 
 pub mod diff;
 pub mod input;
+pub mod pins;
 pub mod regions;
 pub mod trace;
 

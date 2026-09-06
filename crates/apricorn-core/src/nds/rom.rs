@@ -1,5 +1,8 @@
 //! The ROM container tying header, filesystem, and overlays together.
 
+use std::borrow::Cow;
+
+use super::blz;
 use super::header::{Header, crc16_arc};
 use super::nitrofs::NitroFs;
 use super::overlay;
@@ -16,6 +19,8 @@ pub struct NdsRom<'a> {
     pub header: Header,
     fs: NitroFs,
     overlays: Vec<overlay::Overlay>,
+    arm9: &'a [u8],
+    arm7: &'a [u8],
 }
 
 impl<'a> NdsRom<'a> {
@@ -54,11 +59,28 @@ impl<'a> NdsRom<'a> {
         )?;
         let overlays = overlay::parse_all(overlay_data)?;
 
+        // Validate the binary headers now so the accessors below are
+        // infallible.
+        let arm9 = slice(
+            data,
+            header.arm9.rom_offset,
+            header.arm9.size,
+            "ARM9 binary",
+        )?;
+        let arm7 = slice(
+            data,
+            header.arm7.rom_offset,
+            header.arm7.size,
+            "ARM7 binary",
+        )?;
+
         Ok(Self {
             data,
             header,
             fs,
             overlays,
+            arm9,
+            arm7,
         })
     }
 
@@ -72,6 +94,59 @@ impl<'a> NdsRom<'a> {
     #[must_use]
     pub fn overlays(&self) -> &[overlay::Overlay] {
         &self.overlays
+    }
+
+    /// The raw ARM9 binary as stored in the ROM image (the header's
+    /// `arm9.size` bytes — the *stored* size). Loaded to main RAM at
+    /// [`Header::arm9`]'s `ram_address` (0x02000000 on HeartGold).
+    ///
+    /// Retail HeartGold's ARM9 binary is BLZ "compressed static"
+    /// (pret's `main_lz`): a plain head — the secure area plus the crt0
+    /// stub that decompresses the rest at load time — followed by the
+    /// BLZ payload and footer. See [`Self::arm9_image`] for the
+    /// decompressed form and `docs/conversion.md` for the layout.
+    ///
+    /// The first 0x800 bytes of the loaded binary are the **secure
+    /// area**: the dumped image stores them as three `0xE7FFDEFF` trap
+    /// words followed by encrypted bytes, interleaved with a handful of
+    /// Thumb SVC stubs (verified against pret's `lib/syscall/asm/
+    /// _secure_IPKE.s`, which reproduces them byte-identically). The
+    /// entry point is 0x02000800 — *past* the secure area — and the
+    /// harness never executes or hashes anything below it, so nothing
+    /// here decrypts it.
+    #[must_use]
+    pub fn arm9_bytes(&self) -> &'a [u8] {
+        self.arm9
+    }
+
+    /// The ARM9 image as it sits in main RAM after the crt0 stub runs:
+    /// [`Self::arm9_bytes`] decompressed when the binary carries a
+    /// "compressed static" footer, borrowed as-is when it is stored
+    /// plain.
+    ///
+    /// This is the image the harness pins against (`pins/arm9.tsv`
+    /// addresses are RAM addresses into it) and what arm-runner loads.
+    /// The decompressed size lives in the footer; a corrupt payload is
+    /// a loud [`NdsError`], never a silent wrong image.
+    ///
+    /// # Errors
+    /// Returns an [`NdsError`] if a compressed footer is detected but
+    /// the payload fails full BLZ validation.
+    pub fn arm9_image(&self) -> Result<Cow<'a, [u8]>, NdsError> {
+        match blz::static_footer(self.arm9) {
+            Some(raw_size) => Ok(Cow::Owned(blz::decompress(self.arm9, raw_size)?)),
+            None => Ok(Cow::Borrowed(self.arm9)),
+        }
+    }
+
+    /// The raw ARM7 binary as stored in the ROM image (uncompressed).
+    ///
+    /// The harness never runs ARM7 code (the oracle handles the whole
+    /// machine; arm-runner executes leaf functions from the ARM9 side);
+    /// this accessor exists for extraction and inspection parity.
+    #[must_use]
+    pub fn arm7_bytes(&self) -> &'a [u8] {
+        self.arm7
     }
 
     /// The bytes of the file at FAT id `fat_id` (overlays included — they
@@ -149,6 +224,15 @@ mod tests {
         fn put32(rom: &mut [u8], off: usize, v: u32) {
             rom[off..off + 4].copy_from_slice(&v.to_le_bytes());
         }
+        // ARM9 binary = the boot.bin payload; ARM7 = c.bin.
+        put32(&mut rom, 0x20, boot);
+        put32(&mut rom, 0x24, 0x0200_0000);
+        put32(&mut rom, 0x28, 0x0200_0000);
+        put32(&mut rom, 0x2C, 5);
+        put32(&mut rom, 0x30, c);
+        put32(&mut rom, 0x34, 0x037F_8000);
+        put32(&mut rom, 0x38, 0x037F_8000);
+        put32(&mut rom, 0x3C, 3);
         put32(&mut rom, 0x40, FNT as u32);
         put32(&mut rom, 0x44, 64);
         put32(&mut rom, 0x48, FAT as u32);
@@ -244,5 +328,30 @@ mod tests {
         assert_eq!(nds.file_by_path("data/sub/c.bin").unwrap(), b"CCC");
         assert!(nds.file_by_path("nope.bin").is_err());
         assert!(nds.overlays().is_empty());
+
+        // The binaries borrow the image exactly where the header says.
+        assert_eq!(nds.arm9_bytes(), b"BOOT!");
+        assert_eq!(nds.arm7_bytes(), b"CCC");
+        assert_eq!(nds.arm9_bytes().as_ptr(), nds.file(0).unwrap().as_ptr());
+        // No compressed-static footer (the head is smaller than the
+        // secure area), so the image borrows the stored bytes.
+        let image = nds.arm9_image().expect("plain arm9 must pass through");
+        assert_eq!(image.as_ref(), b"BOOT!".as_slice());
+        assert_eq!(image.as_ptr(), nds.arm9_bytes().as_ptr());
+    }
+
+    #[test]
+    fn rejects_out_of_range_binary() {
+        let mut rom = build_synthetic_rom();
+        // Point the ARM7 size past the end of the image.
+        let end = rom.len() as u32;
+        rom[0x3C..0x40].copy_from_slice(&(end + 1).to_le_bytes());
+        assert!(matches!(
+            NdsRom::parse(&rom),
+            Err(NdsError::Truncated {
+                what: "ARM7 binary",
+                ..
+            })
+        ));
     }
 }
