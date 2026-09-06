@@ -40,14 +40,15 @@ same logical visuals. Internals are idiomatic Rust.
 
 Get everything in place so later phases don't stall on unknowns.
 
-- [ ] Clone `pret/pokeheartgold`; inventory what's decompiled (C) vs. still
+- [x] Clone `pret/pokeheartgold`; inventory what's decompiled (C) vs. still
       assembly; map which subsystems (battle, scripts, save, RNG) fall in each
-      bucket.
+      bucket. → `docs/pret-inventory.md`
 - [ ] Build a headless melonDS fork with: fixed RTC, scripted input injection,
       RAM-watch hooks. This becomes the `oracle`.
 - [ ] NDS hardware study: 2D engine (BG modes, OAM sprites, affine),
       NDS-specific 3D usage in HGSS (battle scenes), NitroSDK conventions.
-- [ ] Verify our ROM dump matches the known US HeartGold SHA1.
+- [x] Verify our ROM dump matches the known US HeartGold SHA1.
+      → `apricorn-tools verify`, asserted in `tests/nds_hg.rs`
 - [ ] Rust workspace scaffolding: crates `apricorn-core` (headless engine),
       `apricorn-tools` (asset pipeline), `apricorn-desktop`, later
       `apricorn-android`; CI building + testing on all targets from the start.
@@ -62,7 +63,8 @@ scripted input and dumps state.
 Everything needed to read the ROM into usable engine data. Pure Rust, heavily
 unit-tested, no engine dependency.
 
-- [ ] NDS container parser: header, file allocation table, NitroFS reading.
+- [x] NDS container parser: header, file allocation table, NitroFS reading.
+      → `apricorn-core::nds`, `docs/nds-container.md`
 - [ ] Archive & format parsers — the big one:
       NARC (archives), NCGR/NCLR/NCGR screens (BG tiles/palettes/maps),
       BTX (textures), SDAT (audio — parse now, play later), message/text banks,
