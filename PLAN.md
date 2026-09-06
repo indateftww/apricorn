@@ -43,18 +43,16 @@ Get everything in place so later phases don't stall on unknowns.
 - [x] Clone `pret/pokeheartgold`; inventory what's decompiled (C) vs. still
       assembly; map which subsystems (battle, scripts, save, RNG) fall in each
       bucket. → `docs/pret-inventory.md`
-- [ ] Build a headless melonDS fork with: fixed RTC, scripted input injection,
-      RAM-watch hooks. This becomes the `oracle`.
-- [ ] NDS hardware study: 2D engine (BG modes, OAM sprites, affine),
-      NDS-specific 3D usage in HGSS (battle scenes), NitroSDK conventions.
 - [x] Verify our ROM dump matches the known US HeartGold SHA1.
       → `apricorn-tools verify`, asserted in `tests/nds_hg.rs`
-- [ ] Rust workspace scaffolding: crates `apricorn-core` (headless engine),
+- [x] Rust workspace scaffolding: crates `apricorn-core` (headless engine),
       `apricorn-tools` (asset pipeline), `apricorn-desktop`, later
-      `apricorn-android`; CI building + testing on all targets from the start.
+      `apricorn-android`. (CI moved to Phase 9, where the platform targets
+      exist.)
 
-**Exit:** workspace builds everywhere; oracle runs the original headless with
-scripted input and dumps state.
+**Exit:** workspace builds and tests green; ROM verified; pret coverage
+mapped. (The oracle moved to Phase 2 and the hardware study to Phase 3,
+where their knowledge is first needed.)
 
 ---
 
@@ -87,6 +85,8 @@ engine-loadable asset tree.
 The testing methodology that every later phase leans on. Build it *before*
 game features.
 
+- [ ] Build the headless melonDS oracle (moved from Phase 0): fixed RTC,
+      scripted input injection, RAM-watch hooks that emit traces.
 - [ ] `arm-runner`: ARM9 interpreter harness (test-only, not shipped) that
       loads original overlays and calls original functions with controlled
       inputs — a per-function oracle that works even where pret has no C.
@@ -109,6 +109,9 @@ prints "EQUIVALENT" or the exact frame/state of divergence.
 
 Minimal real-time engine; the "it draws something" phase.
 
+- [ ] NDS hardware study (moved from Phase 0): 2D engine — BG modes, OAM
+      sprites, affine — plus NitroSDK conventions, learned as needed to
+      model the layers correctly.
 - [ ] winit + wgpu renderer with an NDS-style logical layer model:
       two screens, BG layers, sprite/OAM layer, palettes — so *logical frame*
       comparison (draw-lists, not pixels) is possible from the start.
@@ -162,7 +165,8 @@ The largest single phase; break into sub-milestones.
 - [ ] Battle core: turn order, damage/stat/status formulas (each
       differential-tested against original ARM functions), type chart,
       abilities, held items, AI.
-- [ ] Battle UI: the 3D-modeled battle scenes, move animations, HP bars,
+- [ ] Battle UI: the 3D-modeled battle scenes (NDS 3D pipeline usage,
+      studied here — moved from Phase 0), move animations, HP bars,
       text flow — via logical-frame comparison.
 - [ ] Catching mechanics, experience/leveling, EVs/IVs, evolution.
 - [ ] Eggs, breeding basics (as used by main story).
