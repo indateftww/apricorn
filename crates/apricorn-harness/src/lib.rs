@@ -24,7 +24,7 @@
 //!   image; the harness's symbol table, since the decompilation has no
 //!   symbol files.
 //! - **diff** — first-divergence comparator over two traces ([`Verdict`]).
-//! - **arm-runner** — a test-only ARM9 interpreter that loads original
+//! - [`arm`] — a test-only ARM9 interpreter (arm-runner) that loads original
 //!   ARM9 code and calls original functions with controlled inputs, the
 //!   per-function oracle where pret has no C. Never shipped in the game.
 //!
@@ -34,6 +34,7 @@
 
 #![deny(missing_docs)]
 
+pub mod arm;
 pub mod diff;
 pub mod input;
 pub mod pins;

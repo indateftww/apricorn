@@ -14,5 +14,9 @@ sha1 = "0.10"
 name = "apricorn-diff"
 path = "src/bin/apricorn-diff.rs"
 
+[[bin]]
+name = "arm-runner"
+path = "src/bin/arm-runner.rs"
+
 [lints]
 workspace = true
