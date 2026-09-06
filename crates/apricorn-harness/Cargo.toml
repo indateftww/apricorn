@@ -10,5 +10,9 @@ repository.workspace = true
 apricorn-core.workspace = true
 sha1 = "0.10"
 
+[[bin]]
+name = "apricorn-diff"
+path = "src/bin/apricorn-diff.rs"
+
 [lints]
 workspace = true
