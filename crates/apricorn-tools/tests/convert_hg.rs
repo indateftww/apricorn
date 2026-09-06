@@ -15,20 +15,27 @@ const ROM_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../hg_usa.nds");
 
 /// Retail census of hg_usa.nds's convertible content.
 ///
-/// The tiles figure is one short of the 7,950 RGCN-magic members in the
-/// image: `data/dp_areawindow.NCGR` is a DP leftover whose container
-/// header is corrupt three ways (zero BOM, file and section sizes each
-/// under-declared by 8 bytes), so the strict parsers reject it and the
-/// conversion skips it — its tile data is complete, but nothing short of
-/// weakening three independent validations would let it through.
+/// Beyond the raw members, the counts take in the LZ77-10-compressed
+/// population (4,221 decodable members ROM-wide): 1,509 NCGRs, 707 NSCRs,
+/// 367 NCERs and 367 NANRs ship as images behind the 0x10 magic (no NCLR
+/// is ever compressed).
+///
+/// The tiles figure is 24 short of the convertible total: 23 LZ77-10
+/// images in `a/0/0/7` omit the trailing CPOS section their container
+/// header still lists (the file's own 16 bytes missing — retail
+/// inconsistency, skipped; see `docs/conversion.md`), plus
+/// `data/dp_areawindow.NCGR`, a DP leftover whose container header is
+/// corrupt three ways (zero BOM, file and section sizes each
+/// under-declared by 8 bytes).
 ///
 /// The text figure is 829 banks from `a/0/2/7` plus 624 more genuine MAT
-/// banks living in `pbr/msg.narc`.
-const TILES: usize = 7_949;
+/// banks living in `pbr/msg.narc` — the LZ77-10 sniff falls through to
+/// the MAT sniff so banks whose message count is 0x0010 still convert.
+const TILES: usize = 9_458;
 const PALETTES: usize = 4_953;
-const SCREENS: usize = 793;
-const CELLS: usize = 612;
-const ANIMS: usize = 596;
+const SCREENS: usize = 1_500;
+const CELLS: usize = 979;
+const ANIMS: usize = 963;
 const TEXT: usize = 1_453;
 const CHUNKS: usize = TILES + PALETTES + SCREENS + CELLS + ANIMS + TEXT;
 const OVERLAYS: usize = 129;
@@ -62,7 +69,7 @@ fn converts_verified_cache_and_manifest() {
     let first = run();
     assert!(first.status.success(), "convert must report success");
     assert!(
-        String::from_utf8_lossy(&first.stdout).contains("16356 chunks"),
+        String::from_utf8_lossy(&first.stdout).contains("19306 chunks"),
         "the summary reports the chunk total"
     );
 
@@ -152,6 +159,26 @@ fn converts_verified_cache_and_manifest() {
 
     // The corrupt dp_areawindow.NCGR does not become a chunk.
     assert!(!root.join("nitrofs/data/dp_areawindow.tiles").exists());
+
+    // Nor do the 23 retail-inconsistent `a/0/0/7` NCGRs: their LZ77-10
+    // images drop the trailing CPOS section the container header still
+    // counts, so the strict parsers skip them (see the census constant).
+    assert!(!root.join("nitrofs/a/0/0/7/9.tiles").exists());
+
+    // The LZ77-10 members of the intro movie's gs_opening NARC
+    // (`a/2/6/2`) convert: the Game Freak logo and copyright-beat
+    // char/screen files — the assets Phase 3's copyright beat renders.
+    for (member, kind) in [(4, "tiles"), (5, "tiles"), (12, "screen"), (14, "screen")] {
+        let path = root.join(format!("nitrofs/a/2/6/2/{member}.{kind}"));
+        let bytes = std::fs::read(&path)
+            .unwrap_or_else(|_| panic!("gs_opening member {member} converts to .{kind}"));
+        let parsed_kind = cache::kind_of(&bytes).expect("a cache chunk");
+        assert_eq!(
+            parsed_kind.extension(),
+            kind,
+            "gs_opening member {member} is a .{kind} chunk"
+        );
+    }
 
     std::fs::remove_dir_all(&out).expect("test cleans up after itself");
 }

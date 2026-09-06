@@ -19,7 +19,9 @@
 //! For the 781 standard text screens the entries are `width/8 × height/8`
 //! little-endian u16s. The 10 `screenFormat == 1` files instead carry
 //! `width/8 × height/8` u8 entries (half the formula), so treat `szByte`
-//! as authoritative, not the dimensions.
+//! as authoritative, not the dimensions. The section itself may carry
+//! 1–3 alignment bytes past `szByte` (the writer pads it to a 4-byte
+//! boundary).
 //!
 //! Retail HeartGold (US): 791 members. See `docs/nitro-gfx.md` for the
 //! worked ground truth.
@@ -42,6 +44,11 @@ pub struct Nscr<'a> {
     /// Raw `screenFormat`: 0 = text BG; 1 and 2 appear on 19 retail files.
     screen_format: u16,
     entries: &'a [u8],
+    /// Alignment bytes after the map entries (0–3): the writer pads the
+    /// SCRN section to a 4-byte boundary, which only shows up in the
+    /// section size when `szByte` is not a multiple of 4. A retained
+    /// writer artifact, reproduced by [`Nscr::to_bytes`].
+    pad: usize,
 }
 
 /// Whether `data` begins with a NSCR header.
@@ -74,16 +81,29 @@ impl<'a> Nscr<'a> {
                 what: "NSCR dimensions are not a whole number of tiles",
             });
         }
-        if sz_byte != scrn.size - 0x14 {
+        // `szByte` counts the map entries only; the writer pads the
+        // section to a 4-byte boundary, which is invisible whenever the
+        // entry count is a multiple of 4 bytes and shows up as 1–3 extra
+        // section bytes otherwise (e.g. `a/0/6/7#66`: 42 entry bytes in a
+        // 44-byte section tail).
+        let section_entries = scrn.size - 0x14;
+        if sz_byte > section_entries {
+            return Err(NdsError::Invalid {
+                what: "SCRN map data overruns its section",
+            });
+        }
+        let entries_end = scrn.offset + 0x14 + sz_byte;
+        let padded_end = entries_end.div_ceil(4) * 4;
+        if scrn.offset + scrn.size != padded_end {
             return Err(NdsError::Invalid {
                 what: "SCRN section size disagrees with its map data",
             });
         }
         let entries = data
-            .get(scrn.offset + 0x14..scrn.offset + scrn.size)
+            .get(scrn.offset + 0x14..entries_end)
             .ok_or(NdsError::Truncated {
                 what: "SCRN map entries",
-                need: scrn.offset + scrn.size,
+                need: entries_end,
                 got: data.len(),
             })?;
 
@@ -94,6 +114,7 @@ impl<'a> Nscr<'a> {
             color_mode,
             screen_format,
             entries,
+            pad: padded_end - entries_end,
         })
     }
 
@@ -179,7 +200,7 @@ impl<'a> Nscr<'a> {
     /// byte-compares against the original).
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
-        let scrn_size = 8 + 0x0C + self.entries.len();
+        let scrn_size = 8 + 0x0C + self.entries.len() + self.pad;
         let total = 0x10 + scrn_size;
 
         let mut out = Vec::with_capacity(total);
@@ -197,6 +218,7 @@ impl<'a> Nscr<'a> {
         out.extend_from_slice(&self.screen_format.to_le_bytes());
         out.extend_from_slice(&(self.entries.len() as u32).to_le_bytes());
         out.extend_from_slice(self.entries);
+        out.extend(std::iter::repeat_n(0u8, self.pad));
         out
     }
 }
@@ -279,5 +301,34 @@ mod tests {
 
         assert!(!is_nscr(b"not an nscr at all"));
         assert!(Nscr::parse(b"RCSN").is_err());
+    }
+
+    #[test]
+    fn accepts_writer_alignment_padding() {
+        // The retail shape of `a/0/6/7#66`: a map whose entry bytes are
+        // not a multiple of 4, with the section padded to the boundary.
+        // build_nscr's 16 entry bytes are 4-aligned, so extend the map
+        // by 6 bytes (3 entries → 22, ≡ 2 mod 4) and add the 2 pad bytes.
+        let mut data = build_nscr();
+        let old_scrn_size =
+            u32::from_le_bytes([data[0x14], data[0x15], data[0x16], data[0x17]]) as usize;
+        let old_total = data.len();
+        data.extend([0x11, 0x00, 0x12, 0x00, 0x13, 0x00, 0, 0]);
+        let scrn_size = old_scrn_size + 8;
+        let total = old_total + 8;
+        data[0x14..0x18].copy_from_slice(&(scrn_size as u32).to_le_bytes());
+        data[8..12].copy_from_slice(&(total as u32).to_le_bytes());
+        data[0x20..0x24].copy_from_slice(&22u32.to_le_bytes());
+        let nscr = Nscr::parse(&data).expect("padded NSCR must parse");
+        assert_eq!(nscr.entries().len(), 22);
+        assert_eq!(nscr.to_bytes(), data, "round-trips with the padding");
+
+        // Padding beyond the 4-byte boundary is a lie, not an artifact.
+        let mut bad = data.clone();
+        bad.truncate(total - 2);
+        bad[0x14..0x18].copy_from_slice(&((scrn_size - 2) as u32).to_le_bytes());
+        bad[8..12].copy_from_slice(&((total - 2) as u32).to_le_bytes());
+        bad[0x20..0x24].copy_from_slice(&21u32.to_le_bytes()); // odd: impossible
+        assert!(Nscr::parse(&bad).is_err());
     }
 }

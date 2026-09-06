@@ -30,8 +30,10 @@ out/
   otherwise. Every decompressed overlay is exactly its table
   `raw_size` long.
 - **NARC members** become `nitrofs/<narc path>/<id>.<ext>` — members
-  are index-addressed, so the member id is the filename. The manifest's
-  `source` field records the original `path#id`.
+  are index-addressed, so the member id is the filename. A member whose
+  first byte is the `0x10` magic is LZ77-10-compressed (see below): it
+  is decompressed and the format sniffs run on the image. The
+  manifest's `source` field records the original `path#id`.
 - **Loose files** become `nitrofs/<path>.<ext>`.
 - `<ext>` names the chunk kind: `tiles` / `pal` / `screen` / `cells` /
   `anim` / `text`.
@@ -110,28 +112,35 @@ cache is never mistaken for a complete one.
 
 ## Retail HeartGold census (pinned in `tests/convert_hg.rs`)
 
-- 16,356 chunks totaling 89,689,245 bytes: **7,949 tiles, 4,953
-  palettes, 793 screens, 612 cells, 596 anims, 1,453 text** — plus 129
+- 19,306 chunks totaling 110,492,231 bytes: **9,458 tiles, 4,953
+  palettes, 1,500 screens, 979 cells, 963 anims, 1,453 text** — plus 129
   overlays, 127 of them BLZ-decompressed.
-- The tiles figure is one short of the 7,950 RGCN-magic members in the
-  image: `data/dp_areawindow.NCGR` is a DP leftover with a corrupt
+- Beyond the raw members these take in the LZ77-10 population (see
+  below): 1,509 NCGRs, 707 NSCRs, 367 NCERs and 367 NANRs ship as
+  compressed images behind the `0x10` magic (no NCLR ever does).
+- The tiles figure is 24 short of the convertible total, for two
+  reasons. `data/dp_areawindow.NCGR` is a DP leftover with a corrupt
   container header (zero BOM, file and section sizes each under-declared
   by 8 bytes — its tile data is complete, but nothing short of weakening
-  three independent validations would let it through). The strict
-  parsers reject it and the conversion skips it.
+  three independent validations would let it through). And 23 LZ77-10
+  images in `a/0/0/7` each omit the trailing CPOS section their own
+  container header still lists — the image is the file minus its last
+  16 bytes, a retail inconsistency the game tolerates because NNS's
+  loaders never validate the container; the strict parsers skip them.
 - The text figure is 829 banks from the script archive `a/0/2/7` plus
   624 further genuine MAT banks living in `pbr/msg.narc` (the PBR
-  battle-subset message set).
+  battle-subset message set). Banks whose message count is 0x0010 start
+  with the `0x10` magic too; the converter's LZ77-10 sniff falls through
+  to the MAT sniff when the stream path yields nothing, so all 21 of
+  them still convert.
 - Every source file behind these figures also re-serializes byte-exact
   through its parser's `to_bytes()` — the round-trip guard; see
   `docs/roundtrip.md`.
 
 ## BLZ, the ARM9 compression
 
-BLZ (backwards LZ77, pret's `tools/compstatic` scheme) is the *only*
-compression anywhere in a HeartGold ROM — no NARC member or loose
-NitroFS file is LZ77-10 compressed. It compresses both the overlays
-and the ARM9 binary itself, which pret builds as `main_lz` via
+BLZ (backwards LZ77, pret's `tools/compstatic` scheme) compresses the
+overlays and the ARM9 binary itself, which pret builds as `main_lz` via
 `$(COMPSTATIC) -9 -c -f`: a "compressed static" image whose plain
 head (0x41BA bytes — the secure area plus the crt0 stub that
 decompresses the rest at load time) runs straight into the payload,
@@ -165,3 +174,42 @@ bytes and the 8-byte footer. The decoder walks the flags groups from
 `payEnd` down to the head byte, producing the 216,448 raw bytes whose
 SHA-256 the manifest records:
 `b2f4e05409c8dd077aecc065cdc9da6b16bf41adc260ad8af45e013029f644ce`.
+
+## LZ77-10, the asset compression
+
+The *forward* LZ77-10 variant (the format the SDK's
+`MI_UncompressLZ8`/`MI_UncompressLZ16` decoders accept) compresses
+selected NARC members — those pret requests with `isCompressed=TRUE`.
+HeartGold's examples live in the intro movie's `a/2/6/2`
+(`gs_opening`): members 4–12 and 14 carry the `0x10` magic, covering
+the copyright-beat NCGR/NSCR pair and the Game Freak logo's
+char/screen files. A stream is a 4-byte header — the `0x10` magic plus
+a u24 decompressed size — followed by groups of one flags byte and up
+to 8 codes (flags consumed MSB-first: bit 7 is the first token):
+flag 0 = literal, flag 1 = a two-byte match
+`[b1][b2]` with `len = (b1 >> 4) + 3` (3..=18) and
+`disp = ((b1 & 0xF) << 8 | b2) + 1` (1..=4096), copying from
+`write - disp` forward so a match may read bytes it is itself writing
+(RLE runs, `disp == 1`). Decoding stops when the declared image is
+full; trailing padding is ignored. Full format reference:
+`crates/apricorn-core/src/nds/lz10.rs`.
+
+The converter sniffs the magic on each raw member and decompresses
+once before the format sniffs run (a stream decompresses to strictly
+more bytes than it stores, so a nested sniff cannot loop). The `0x10`
+sniff runs *before* the MAT heuristic — a small LZ77-10 image can
+mimic MAT header fields — and a decompression failure means "not this
+format", the same convention the MAT sniff uses for its own misses.
+
+The population is ROM-wide, not just the intro movie: 4,287 members
+carry the `0x10` magic and 4,221 decode to convertible images. The
+ambiguity cuts both ways — a genuine MAT bank whose message count is
+0x0010 also starts with `0x10` — so when the stream path yields nothing
+the sniff falls back to the MAT check on the original bytes. And a
+sniff hit on a decoded image that then fails its parse is not a
+corruption to abort on but a retail inconsistency the game tolerates
+(NNS's loaders never validate the container): most notably 23 `a/0/0/7`
+NCGRs whose image drops the trailing CPOS section the container header
+still lists. Those members are skipped, census-pinned; parse failures
+on members whose format magic is directly present still abort the
+conversion.

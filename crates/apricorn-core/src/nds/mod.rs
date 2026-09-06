@@ -7,6 +7,7 @@
 
 pub mod blz;
 pub mod header;
+pub mod lz10;
 pub mod nitrofs;
 pub mod overlay;
 pub mod rom;

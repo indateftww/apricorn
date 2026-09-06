@@ -224,6 +224,11 @@ pub struct Ncer<'a> {
     version: u16,
     mapping: CellMapping,
     cells: Vec<Cell<'a>>,
+    /// Trailing alignment bytes after the OAM data when no VRAM or UCAT
+    /// block follows (0–3): a section ending after the OAM data may end
+    /// there exactly or 4-aligned, and both shapes ship in retail. A
+    /// retained writer artifact, reproduced by [`Ncer::to_bytes`].
+    oam_pad: usize,
     vram: Option<VramTransfer>,
     ucat: Option<Ucat>,
     labels: Vec<&'a str>,
@@ -358,7 +363,17 @@ impl<'a> Ncer<'a> {
                         min_x: u16le(data, at + 12)? as i16,
                         min_y: u16le(data, at + 14)? as i16,
                     };
-                    if bounds.min_x > bounds.max_x || bounds.min_y > bounds.max_y {
+                    // A cell with no OAMs keeps the tool's sentinel box
+                    // (max = INT16_MIN, min = INT16_MAX — never updated
+                    // per OAM); a non-empty cell must carry a real box.
+                    let sentinel = bounds.max_x == i16::MIN
+                        && bounds.max_y == i16::MIN
+                        && bounds.min_x == i16::MAX
+                        && bounds.min_y == i16::MAX;
+                    if !sentinel
+                        && oam_count > 0
+                        && (bounds.min_x > bounds.max_x || bounds.min_y > bounds.max_y)
+                    {
                         return Err(NdsError::Invalid {
                             what: "NCER cell bounding box (min > max)",
                         });
@@ -391,11 +406,31 @@ impl<'a> Ncer<'a> {
             at += 6 * cell.oam_count;
         }
         // Body-relative alignment, so relative to `body`, not absolute.
+        // The padding exists to place a following VRAM transfer block on
+        // a 4-byte boundary; a section that simply ends after the OAM
+        // data ends there — exactly, or padded, and retail ships both
+        // shapes.
         let padded_oam_end = body + (oam_end - body).div_ceil(4) * 4;
+        let mut oam_pad = 0;
+        if vram_off == 0 && ucat_off == 0 {
+            if body_end == padded_oam_end {
+                oam_pad = padded_oam_end - oam_end;
+            } else if body_end != oam_end {
+                return Err(NdsError::Invalid {
+                    what: "NCER KBEC section does not end at the OAM data",
+                });
+            }
+        }
 
         // --- Optional VRAM transfer block, exactly at the padded end ---
         let mut vram = None;
-        let mut end = padded_oam_end;
+        // A section with no VRAM/UCAT block ends at the OAM data or its
+        // padding — both validated above, so `body_end` is where it ends.
+        let mut end = if vram_off != 0 || ucat_off != 0 {
+            padded_oam_end
+        } else {
+            body_end
+        };
         if vram_off != 0 {
             if vram_off != padded_oam_end - body {
                 return Err(NdsError::Invalid {
@@ -482,6 +517,7 @@ impl<'a> Ncer<'a> {
             version,
             mapping,
             cells,
+            oam_pad,
             vram,
             ucat,
             labels,
@@ -587,8 +623,15 @@ impl<'a> Ncer<'a> {
         for cell in &self.cells {
             body.extend_from_slice(cell.oam);
         }
-        // Alignment padding: zero on every padded retail file (pinned).
-        body.resize(body.len().div_ceil(4) * 4, 0);
+        // Alignment padding: a following VRAM/UCAT block sits on a
+        // 4-byte boundary (the padding bytes are zero on every padded
+        // retail file); a section ending after the OAM data keeps the
+        // writer's own padding, retained from the parse.
+        if self.vram.is_some() || self.ucat.is_some() {
+            body.resize(body.len().div_ceil(4) * 4, 0);
+        } else {
+            body.resize(body.len() + self.oam_pad, 0);
+        }
 
         let vram_off = self.vram.as_ref().map(|_| body.len());
         if let Some(v) = &self.vram {

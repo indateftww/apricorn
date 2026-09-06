@@ -8,7 +8,8 @@
 //! static" image — a plain head (secure area + the crt0 stub that
 //! decompresses the rest at load time), the BLZ payload, and the same
 //! 8-byte footer (see [`NdsRom::arm9_image`](super::NdsRom::arm9_image)).
-//! No NARC member or loose NitroFS file is LZ77-10 compressed.
+//! Compressed NARC members use the *forward* LZ77-10 variant instead —
+//! see [`super::lz10`].
 //!
 //! BLZ is LZ77 written backwards: the payload is decoded from its end to
 //! its start while writing the image from its end to its start, so

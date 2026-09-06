@@ -26,7 +26,7 @@ use apricorn_core::formats::{
     MsgBank, Nanr, Narc, Ncer, Ncgr, Nclr, Nscr, is_nanr, is_narc, is_ncer, is_ncgr, is_nclr,
     is_nscr,
 };
-use apricorn_core::nds::{NdsRom, blz};
+use apricorn_core::nds::{NdsRom, blz, lz10};
 use sha1::{Digest as _, Sha1};
 
 use crate::extract::{json, sha256_hex, write_verified};
@@ -208,6 +208,17 @@ fn run(path: &str, out_dir: &str) -> Result<Option<Summary>, String> {
 /// Encodes one source member as a cache chunk; `None` when the member is
 /// none of the six convertible kinds.
 ///
+/// LZ77-10-compressed members (`isCompressed=TRUE` in pret's build) are
+/// decompressed first and the sniffs run on the image; the sniff runs
+/// before the MAT heuristic (whose header fields a small LZ77-10 image
+/// can mimic). But the ambiguity cuts both ways — a MAT bank whose
+/// message count is 0x0010 also starts with the 0x10 magic — so when
+/// the LZ77-10 path yields nothing (the stream doesn't decompress, or
+/// its image is none of the convertible formats), the MAT sniff runs on
+/// the original bytes. A sniff hit that fails its parse is just "not
+/// that format" — the same convention both sniffs use for their own
+/// misses.
+///
 /// # Errors
 /// A member whose magic matches a known format but fails to parse is a
 /// corruption (or a parser bug) and is reported; the MAT sniff is a
@@ -233,15 +244,49 @@ fn encode_member(source: &str, member: &[u8]) -> Result<Option<(ChunkKind, Vec<u
         let nanr = Nanr::parse(member).map_err(err)?;
         let chunk = cache::encode_animation(&nanr).map_err(err)?;
         Ok(Some((ChunkKind::Animation, chunk)))
-    } else if mat_sniff(member) {
-        match MsgBank::parse(member) {
-            Ok(bank) => Ok(Some((ChunkKind::Text, cache::encode_text(&bank)))),
-            // Sniff hit, parse miss: an ordinary binary that happens to
-            // start with a plausible (count, key) pair.
-            Err(_) => Ok(None),
+    } else if lz10::is_lz10(member) {
+        // A 0x10 first byte is ambiguous: an LZ77-10 stream, or a MAT
+        // bank whose u16 message count is 0x0010. Try the LZ77-10 path
+        // first (one nesting level, as Nitro uses: decompress and sniff
+        // again — a successful expansion is always strictly larger than
+        // its stream, so the recursion cannot loop); when it yields
+        // nothing, fall through to the MAT sniff on the original bytes
+        // so genuine banks starting with 0x10 still convert.
+        //
+        // A sniff hit whose parse fails on a *decoded image* is not a
+        // corruption to report but a retail inconsistency the game
+        // tolerates (the dp_areawindow class): NNS's loaders never
+        // validate the container, so a file whose image omits bytes its
+        // own header counts — e.g. the 23 `a/0/0/7` NCGRs whose LZ77-10
+        // image drops the trailing CPOS section the container still
+        // lists — ships and runs anyway. Those members are skipped (the
+        // census tests pin the count); parse failures on members whose
+        // magic is directly present keep aborting.
+        match lz10::decompress(member) {
+            Ok(raw) => match encode_member(source, &raw) {
+                some @ Ok(Some(_)) => some,
+                Ok(None) | Err(_) => encode_mat(member),
+            },
+            Err(_) => encode_mat(member),
         }
+    } else if mat_sniff(member) {
+        encode_mat(member)
     } else {
         Ok(None)
+    }
+}
+
+/// The MAT sniff's branch, shared by its own arm and the LZ77-10
+/// fallthrough: parse the member as a message bank, a sniff miss being
+/// an ordinary binary that happens to start with a plausible (count,
+/// key) pair.
+fn encode_mat(member: &[u8]) -> Result<Option<(ChunkKind, Vec<u8>)>, String> {
+    if !mat_sniff(member) {
+        return Ok(None);
+    }
+    match MsgBank::parse(member) {
+        Ok(bank) => Ok(Some((ChunkKind::Text, cache::encode_text(&bank)))),
+        Err(_) => Ok(None),
     }
 }
 
