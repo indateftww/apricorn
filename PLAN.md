@@ -63,7 +63,7 @@ unit-tested, no engine dependency.
 
 - [x] NDS container parser: header, file allocation table, NitroFS reading.
       → `apricorn-core::nds`, `docs/nds-container.md`
-- [ ] Archive & format parsers — the big one (sub-items in rough
+- [x] Archive & format parsers — the big one (sub-items in rough
       dependency order; cross-check each against Tinke/mkds-style docs
       and pret's headers):
       - [x] NARC (archives) → `apricorn-core::formats`, `docs/narc.md`
@@ -83,8 +83,10 @@ unit-tested, no engine dependency.
       loader stays fast and simple.
       → `apricorn-core::cache`, `apricorn-tools convert`,
       `docs/conversion.md`
-- [ ] Round-trip tests: re-serialize and byte-compare against the originals
+- [x] Round-trip tests: re-serialize and byte-compare against the originals
       (guards against parser bugs).
+      → `apricorn-core::formats` (`to_bytes` per format),
+      `tests/roundtrip_hg.rs`, `docs/roundtrip.md`
 
 **Exit:** `apricorn-tools extract hg_usa.nds out/` produces a full, verified,
 engine-loadable asset tree.

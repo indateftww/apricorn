@@ -47,8 +47,19 @@ use crate::nds::{NdsError, u16le, u32le};
 #[derive(Debug)]
 pub struct Narc<'a> {
     data: &'a [u8],
+    /// The header's version field (0x0100 on every retail archive).
+    version: u16,
     /// BTAF member ranges, relative to the GMIF body.
     members: Vec<(u32, u32)>,
+    /// BTAF's `u16 reserved` field, read raw (0 on every retail archive)
+    /// so the round-trip serializer genuinely covers it.
+    btaf_reserved: u16,
+    /// The whole BTNF chunk, verbatim. It is retained raw rather than
+    /// re-derived from [`Narc::name`] paths: the chunk is a directory
+    /// tree with writer-chosen subtable order and padding, and only a
+    /// full serializer would reproduce it — the engine reads the parsed
+    /// paths, so [`Narc::to_bytes`] copies the bytes instead.
+    btnf: &'a [u8],
     /// Absolute offset of the GMIF body within `data`.
     body: usize,
     /// Member names (full `dir/file` paths), by member id. `None` for
@@ -86,6 +97,7 @@ impl<'a> Narc<'a> {
                 what: "NARC byte-order mark",
             });
         }
+        let version = u16le(data, 0x06)?;
         let file_size = u32le(data, 0x08)? as usize;
         if file_size != data.len() {
             return Err(NdsError::Invalid {
@@ -144,6 +156,9 @@ impl<'a> Narc<'a> {
             });
         }
         let member_count = usize::from(u16le(data, btaf_off + 8)?);
+        // BTAF's reserved field is read raw (not validated) so the
+        // round-trip serializer genuinely covers it.
+        let btaf_reserved = u16le(data, btaf_off + 10)?;
         if btaf_size != 12 + member_count * 8 {
             return Err(NdsError::Invalid {
                 what: "BTAF chunk size disagrees with the member count",
@@ -169,10 +184,20 @@ impl<'a> Narc<'a> {
         }
 
         let names = parse_btnf(data, btnf_off, btnf_size, member_count)?;
+        let btnf = data
+            .get(btnf_off..btnf_off + btnf_size)
+            .ok_or(NdsError::Truncated {
+                what: "BTNF chunk",
+                need: btnf_off + btnf_size,
+                got: data.len(),
+            })?;
 
         Ok(Self {
             data,
+            version,
             members,
+            btaf_reserved,
+            btnf,
             body: gmif_off + 8,
             names,
         })
@@ -182,6 +207,12 @@ impl<'a> Narc<'a> {
     #[must_use]
     pub fn file_count(&self) -> usize {
         self.members.len()
+    }
+
+    /// The header's version field (0x0100 on every retail archive).
+    #[must_use]
+    pub fn version(&self) -> u16 {
+        self.version
     }
 
     /// The bytes of member `id` (members are index-addressed; this is how
@@ -208,6 +239,52 @@ impl<'a> Narc<'a> {
     pub fn file_by_name(&self, path: &str) -> Option<&'a [u8]> {
         let id = self.names.iter().position(|n| n.as_deref() == Some(path))?;
         self.file(id).ok()
+    }
+
+    /// Re-serializes the parsed NARC into its container form.
+    ///
+    /// Byte-exact: the header version and BTAF's reserved field are
+    /// retained raw, the member ranges and chunk sizes are re-derived
+    /// from the parsed layout, the BTNF chunk is copied verbatim (see
+    /// the field docs for why it is not re-derived from the parsed
+    /// paths), and the GMIF body is copied verbatim from the retained
+    /// archive bytes — so this is the round-trip half of the parser
+    /// guard (`tests/roundtrip_hg.rs` re-serializes every NARC in the
+    /// ROM and byte-compares against the original).
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let btaf_size = 12 + 8 * self.members.len();
+        let body = &self.data[self.body..];
+        let gmif_size = 8 + body.len();
+        let total = 0x10 + btaf_size + self.btnf.len() + gmif_size;
+
+        let mut out = Vec::with_capacity(total);
+        // Container header.
+        out.extend_from_slice(b"NARC");
+        out.extend_from_slice(&0xFFFEu16.to_le_bytes());
+        out.extend_from_slice(&self.version.to_le_bytes());
+        out.extend_from_slice(&(total as u32).to_le_bytes());
+        out.extend_from_slice(&0x10u16.to_le_bytes());
+        out.extend_from_slice(&3u16.to_le_bytes());
+
+        // BTAF: the allocation table, re-derived from the parsed ranges.
+        out.extend_from_slice(b"BTAF");
+        out.extend_from_slice(&(btaf_size as u32).to_le_bytes());
+        out.extend_from_slice(&(self.members.len() as u16).to_le_bytes());
+        out.extend_from_slice(&self.btaf_reserved.to_le_bytes());
+        for &(start, end) in &self.members {
+            out.extend_from_slice(&start.to_le_bytes());
+            out.extend_from_slice(&end.to_le_bytes());
+        }
+
+        // BTNF: the whole chunk — header included — verbatim.
+        out.extend_from_slice(self.btnf);
+
+        // GMIF: the member data, verbatim.
+        out.extend_from_slice(b"GMIF");
+        out.extend_from_slice(&(gmif_size as u32).to_le_bytes());
+        out.extend_from_slice(body);
+        out
     }
 }
 
@@ -449,6 +526,13 @@ mod tests {
         assert_eq!(narc.file_by_name("sub/c.bin"), Some(&b"CCC"[..]));
         assert!(narc.file_by_name("nope.bin").is_none());
         assert!(narc.file(2).is_err());
+
+        assert_eq!(narc.version(), 0x0100);
+        assert_eq!(
+            narc.to_bytes(),
+            data,
+            "round-trips byte-exact, BTNF verbatim"
+        );
     }
 
     /// The retail HeartGold convention: a root-only, empty name table
@@ -469,6 +553,7 @@ mod tests {
         assert_eq!(narc.file_count(), 1);
         assert_eq!(narc.file(0).unwrap(), &[0x00]);
         assert_eq!(narc.name(0), None);
+        assert_eq!(narc.to_bytes(), data, "retail-style archive round-trips");
     }
 
     #[test]

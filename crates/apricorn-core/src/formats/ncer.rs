@@ -88,6 +88,19 @@ impl CellMapping {
             }),
         }
     }
+
+    /// The raw `NNSG2dCharacterDataMapingType` value (the inverse of
+    /// [`CellMapping::from_raw`]; used by the round-trip serializer).
+    #[must_use]
+    pub(crate) fn raw(self) -> u32 {
+        match self {
+            Self::OneD32K => 0,
+            Self::OneD64K => 1,
+            Self::OneD128K => 2,
+            Self::OneD256K => 3,
+            Self::TwoD => 4,
+        }
+    }
 }
 
 /// A cell's bounding box, from an extended cell record.
@@ -531,6 +544,110 @@ impl<'a> Ncer<'a> {
     pub fn labels(&self) -> &[&str] {
         &self.labels
     }
+
+    /// Re-serializes the parsed NCER into its container form.
+    ///
+    /// Byte-exact on retail-shaped files, with every layout constant
+    /// re-derived rather than copied: the KBEC header fields, the
+    /// `oamDataOffset` chain, the VRAM/UCAT block offsets, the UCAT
+    /// pointer derivation, and the LBAL offset table (a running sum of
+    /// the label lengths). Two raw-byte invariants the serializer relies
+    /// on were pinned empirically across all 612 retail banks: the OAM
+    /// data's 4-byte alignment padding is zero, and every LBAL section
+    /// ends exactly at its last label's NUL. (`tests/roundtrip_hg.rs`
+    /// re-serializes every NCER in the ROM and byte-compares against the
+    /// original — a parser that mislaid any field breaks the comparison.)
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let n_cells = self.cells.len();
+        let extended = self.cells[0].bounds.is_some();
+        let stride = if extended { 0x10 } else { 8 };
+
+        // --- KBEC body: header, cell records, OAM data, VRAM, UCAT ---
+        let mut body = vec![0u8; 0x18];
+        body[0..2].copy_from_slice(&(n_cells as u16).to_le_bytes());
+        body[2..4].copy_from_slice(&u16::from(extended).to_le_bytes());
+        body[4..8].copy_from_slice(&0x18u32.to_le_bytes());
+        body[8..12].copy_from_slice(&self.mapping.raw().to_le_bytes());
+        let mut oam_off = 0usize;
+        for cell in &self.cells {
+            let at = body.len();
+            body.resize(at + stride, 0);
+            body[at..at + 2].copy_from_slice(&(cell.oam_count as u16).to_le_bytes());
+            body[at + 2..at + 4].copy_from_slice(&cell.attr.to_le_bytes());
+            body[at + 4..at + 6].copy_from_slice(&(oam_off as u16).to_le_bytes());
+            if let Some(b) = cell.bounds {
+                body[at + 8..at + 10].copy_from_slice(&b.max_x.to_le_bytes());
+                body[at + 10..at + 12].copy_from_slice(&b.max_y.to_le_bytes());
+                body[at + 12..at + 14].copy_from_slice(&b.min_x.to_le_bytes());
+                body[at + 14..at + 16].copy_from_slice(&b.min_y.to_le_bytes());
+            }
+            oam_off += 6 * cell.oam_count;
+        }
+        for cell in &self.cells {
+            body.extend_from_slice(cell.oam);
+        }
+        // Alignment padding: zero on every padded retail file (pinned).
+        body.resize(body.len().div_ceil(4) * 4, 0);
+
+        let vram_off = self.vram.as_ref().map(|_| body.len());
+        if let Some(v) = &self.vram {
+            body.extend_from_slice(&v.sz_byte_max.to_le_bytes());
+            body.extend_from_slice(&8u32.to_le_bytes());
+            for &(src, size) in &v.blocks {
+                body.extend_from_slice(&src.to_le_bytes());
+                body.extend_from_slice(&size.to_le_bytes());
+            }
+        }
+        let ucat_off = self.ucat.as_ref().map(|_| body.len());
+        if let Some(u) = &self.ucat {
+            body.extend_from_slice(b"TACU");
+            body.extend_from_slice(&((0x10 + 8 * n_cells) as u32).to_le_bytes());
+            body.extend_from_slice(&(n_cells as u16).to_le_bytes());
+            body.extend_from_slice(&1u16.to_le_bytes());
+            body.extend_from_slice(&8u32.to_le_bytes());
+            for i in 0..n_cells {
+                body.extend_from_slice(&((8 + 4 * n_cells + 4 * i) as u32).to_le_bytes());
+            }
+            for &attr in &u.attrs {
+                body.extend_from_slice(&attr.to_le_bytes());
+            }
+        }
+        body[0xC..0x10].copy_from_slice(&(vram_off.unwrap_or(0) as u32).to_le_bytes());
+        body[0x14..0x18].copy_from_slice(&(ucat_off.unwrap_or(0) as u32).to_le_bytes());
+
+        // --- LBAL body: the derived offset table, then the strings ---
+        let table = 4 * self.labels.len();
+        let mut labl_body = vec![0u8; table];
+        for (i, label) in self.labels.iter().enumerate() {
+            let strings_off = labl_body.len() - table;
+            labl_body[4 * i..4 * i + 4].copy_from_slice(&(strings_off as u32).to_le_bytes());
+            labl_body.extend_from_slice(label.as_bytes());
+            labl_body.push(0);
+        }
+
+        // --- Container ---
+        let kbec_size = 8 + body.len();
+        let labl_size = 8 + labl_body.len();
+        let total = 0x10 + kbec_size + labl_size + 0xC;
+        let mut out = Vec::with_capacity(total);
+        out.extend_from_slice(b"RECN");
+        out.extend_from_slice(&0xFEFFu16.to_le_bytes());
+        out.extend_from_slice(&self.version.to_le_bytes());
+        out.extend_from_slice(&(total as u32).to_le_bytes());
+        out.extend_from_slice(&0x10u16.to_le_bytes());
+        out.extend_from_slice(&3u16.to_le_bytes());
+        out.extend_from_slice(b"KBEC");
+        out.extend_from_slice(&(kbec_size as u32).to_le_bytes());
+        out.extend_from_slice(&body);
+        out.extend_from_slice(b"LBAL");
+        out.extend_from_slice(&(labl_size as u32).to_le_bytes());
+        out.extend_from_slice(&labl_body);
+        out.extend_from_slice(b"TXEU");
+        out.extend_from_slice(&0xCu32.to_le_bytes());
+        out.extend_from_slice(&[0u8; 4]);
+        out
+    }
 }
 
 #[cfg(test)]
@@ -710,6 +827,12 @@ mod tests {
                         (false, None) => {}
                         _ => panic!("UCAT presence mismatch"),
                     }
+
+                    assert_eq!(
+                        ncer.to_bytes(),
+                        data,
+                        "byte-exact across every block combination"
+                    );
                 }
             }
         }

@@ -198,6 +198,51 @@ impl<'a> MsgBank<'a> {
     pub fn raw(&self) -> &'a [u8] {
         self.data
     }
+
+    /// Re-serializes the parsed bank into its MAT member form —
+    /// re-encryption, not a copy: the entry table is rebuilt from the
+    /// packed layout and re-XORed with the Decrypt1 seeds, and every
+    /// message's units are re-XORed with the Decrypt2 rolling seed.
+    ///
+    /// Byte-exact: the parse retains the bank key and every decrypted
+    /// unit, and the packed entry layout (`offset`/`length` pairs tiling
+    /// the member) is fully derivable, so this is the round-trip half of
+    /// the parser guard (`tests/roundtrip_hg.rs` re-serializes every MAT
+    /// in `a/0/2/7` and byte-compares against the original) — and, since
+    /// the two XOR layers are independent, it exercises both decrypt
+    /// paths in both directions.
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let count = self.message_count();
+        let table_end = 4 + 8 * count;
+        let mut out = Vec::with_capacity(table_end + 2 * self.units.len());
+        out.extend_from_slice(&(count as u16).to_le_bytes());
+        out.extend_from_slice(&self.key.to_le_bytes());
+
+        // Entry table: offset/length re-derived from the packed layout,
+        // re-XORed with the same per-entry seeds Decrypt1 undoes.
+        let seed = |n: usize| {
+            let seed = (u64::from(self.key) * ENTRY_MUL * (n as u64 + 1)) & 0xFFFF;
+            seed as u32 | (seed as u32) << 16
+        };
+        let mut cursor = table_end as u32;
+        for n in 0..count {
+            let length = (self.starts[n + 1] - self.starts[n]) as u32;
+            out.extend_from_slice(&(cursor ^ seed(n)).to_le_bytes());
+            out.extend_from_slice(&(length ^ seed(n)).to_le_bytes());
+            cursor += 2 * length;
+        }
+
+        // String data: units re-XORed with the rolling seeds Decrypt2 undoes.
+        for n in 0..count {
+            let mut text_seed = ((n as u64 + 1) * TEXT_MUL) as u16;
+            for &unit in &self.units[self.starts[n]..self.starts[n + 1]] {
+                out.extend_from_slice(&(unit ^ text_seed).to_le_bytes());
+                text_seed = text_seed.wrapping_add(TEXT_ADD as u16);
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]
@@ -267,6 +312,11 @@ mod tests {
         assert_eq!(bank.message(3), None);
         assert_eq!(bank.messages().count(), 3);
         assert_eq!(bank.raw(), &data[..]);
+        assert_eq!(
+            bank.to_bytes(),
+            data,
+            "round-trips byte-exact (re-encrypts)"
+        );
 
         // A different key must yield different ciphertext: fixture with key
         // 0 is not the same bytes as key 0xFEE8.
@@ -284,6 +334,7 @@ mod tests {
         assert_eq!(bank.message_count(), 0);
         assert_eq!(bank.messages().count(), 0);
         assert_eq!(bank.message(0), None);
+        assert_eq!(bank.to_bytes(), data, "empty bank round-trips byte-exact");
     }
 
     #[test]

@@ -225,6 +225,51 @@ impl<'a> Nclr<'a> {
     pub fn pmcp(&self) -> Option<&Pmcp> {
         self.pmcp.as_ref()
     }
+
+    /// Re-serializes the parsed NCLR into its container form.
+    ///
+    /// Byte-exact: the parse retains the raw `fmt` (including the
+    /// follower-sprite flag bits), `bExtendedPlt`, the logical `szByte`,
+    /// the stored palette bytes, and the whole PMCP table, so this is the
+    /// round-trip half of the parser guard (`tests/roundtrip_hg.rs`
+    /// re-serializes every NCLR in the ROM and byte-compares against the
+    /// original).
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let pltt_size = 8 + 0x10 + self.stored.len();
+        let pmcp_size = self
+            .pmcp
+            .as_ref()
+            .map_or(0, |p| 8 + 8 + 2 * usize::from(p.num_palettes));
+        let total = 0x10 + pltt_size + pmcp_size;
+
+        let mut out = Vec::with_capacity(total);
+        out.extend_from_slice(b"RLCN");
+        out.extend_from_slice(&0xFEFFu16.to_le_bytes());
+        out.extend_from_slice(&self.version.to_le_bytes());
+        out.extend_from_slice(&(total as u32).to_le_bytes());
+        out.extend_from_slice(&0x10u16.to_le_bytes());
+        out.extend_from_slice(&(u16::from(self.pmcp.is_some()) + 1).to_le_bytes());
+        out.extend_from_slice(b"TTLP");
+        out.extend_from_slice(&(pltt_size as u32).to_le_bytes());
+        out.extend_from_slice(&self.fmt_raw.to_le_bytes());
+        out.extend_from_slice(&u32::from(self.extended).to_le_bytes());
+        out.extend_from_slice(&self.logical_size.to_le_bytes());
+        out.extend_from_slice(&0x10u32.to_le_bytes());
+        out.extend_from_slice(self.stored);
+
+        if let Some(pmcp) = &self.pmcp {
+            out.extend_from_slice(b"PMCP");
+            out.extend_from_slice(&(pmcp_size as u32).to_le_bytes());
+            out.extend_from_slice(&pmcp.num_palettes.to_le_bytes());
+            out.extend_from_slice(&0xBEEFu16.to_le_bytes());
+            out.extend_from_slice(&8u32.to_le_bytes());
+            for &index in &pmcp.indices {
+                out.extend_from_slice(&index.to_le_bytes());
+            }
+        }
+        out
+    }
 }
 
 fn parse_pmcp(data: &[u8], sec: &NitroSection) -> Result<Pmcp, NdsError> {
@@ -313,6 +358,14 @@ mod tests {
         assert_eq!(nclr.fmt_raw(), FLAGGED_16C_FMT);
         assert_eq!(nclr.pixel_fmt(), PixelFmt::Pltt16);
         assert_eq!(nclr.bpp(), 4);
+        assert_eq!(nclr.to_bytes(), data, "round-trips the raw flag bits");
+    }
+
+    #[test]
+    fn round_trips_synthetic_files() {
+        let data = build_compressed_nclr();
+        let nclr = Nclr::parse(&data).expect("synthetic NCLR must parse");
+        assert_eq!(nclr.to_bytes(), data, "byte-exact, PMCP included");
     }
 
     #[test]

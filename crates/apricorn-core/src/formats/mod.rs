@@ -219,6 +219,17 @@ impl PixelFmt {
         }
     }
 
+    /// The raw `GXTexFmt` value a CHAR or PLTT section stores (the
+    /// inverse of [`PixelFmt::from_raw`]; used by the round-trip
+    /// serializers).
+    #[must_use]
+    pub(crate) fn raw(self) -> u32 {
+        match self {
+            Self::Pltt16 => 3,
+            Self::Pltt256 => 4,
+        }
+    }
+
     /// The number of bytes in one 8×8 tile.
     #[must_use]
     pub fn tile_size(self) -> usize {

@@ -122,6 +122,9 @@ cache is never mistaken for a complete one.
 - The text figure is 829 banks from the script archive `a/0/2/7` plus
   624 further genuine MAT banks living in `pbr/msg.narc` (the PBR
   battle-subset message set).
+- Every source file behind these figures also re-serializes byte-exact
+  through its parser's `to_bytes()` — the round-trip guard; see
+  `docs/roundtrip.md`.
 
 ## BLZ, the overlay compression
 

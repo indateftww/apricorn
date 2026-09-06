@@ -145,6 +145,11 @@ zero bytes after the count.
 * GROUP items reference indices inside their own sub-list.
 * The SYMB and INFO list counts agree per list.
 
+SDAT is the one format **excluded from the round-trip guard**
+(`docs/roundtrip.md`): the writer's string-pool packing and record
+interleaving are not retained, so the file cannot be re-serialized
+byte-exact from the parsed struct. Phase 7 revisits SDAT.
+
 ## Worked example
 
 `SEQ_PV001` (main archive, seq index 1): record

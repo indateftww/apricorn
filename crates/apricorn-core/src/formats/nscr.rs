@@ -168,6 +168,37 @@ impl<'a> Nscr<'a> {
         let idx = usize::from(y) * usize::from(self.width_tiles()) + usize::from(x);
         u16le(self.entries, 2 * idx)
     }
+
+    /// Re-serializes the parsed NSCR into its container form.
+    ///
+    /// Byte-exact: the parse retains the dimensions, the raw
+    /// `colorMode`/`screenFormat`, and the whole map-entry array (the
+    /// entry interpretation variants included — the entries are raw
+    /// bytes), so this is the round-trip half of the parser guard
+    /// (`tests/roundtrip_hg.rs` re-serializes every NSCR in the ROM and
+    /// byte-compares against the original).
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let scrn_size = 8 + 0x0C + self.entries.len();
+        let total = 0x10 + scrn_size;
+
+        let mut out = Vec::with_capacity(total);
+        out.extend_from_slice(b"RCSN");
+        out.extend_from_slice(&0xFEFFu16.to_le_bytes());
+        out.extend_from_slice(&self.version.to_le_bytes());
+        out.extend_from_slice(&(total as u32).to_le_bytes());
+        out.extend_from_slice(&0x10u16.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(b"NRCS");
+        out.extend_from_slice(&(scrn_size as u32).to_le_bytes());
+        out.extend_from_slice(&self.width.to_le_bytes());
+        out.extend_from_slice(&self.height.to_le_bytes());
+        out.extend_from_slice(&self.color_mode.to_le_bytes());
+        out.extend_from_slice(&self.screen_format.to_le_bytes());
+        out.extend_from_slice(&(self.entries.len() as u32).to_le_bytes());
+        out.extend_from_slice(self.entries);
+        out
+    }
 }
 
 #[cfg(test)]
@@ -222,6 +253,8 @@ mod tests {
         assert_eq!(nscr.entry(3, 1), Ok(0x040C));
         assert!(nscr.entry(4, 0).is_err());
         assert!(nscr.entry(0, 2).is_err());
+
+        assert_eq!(nscr.to_bytes(), data, "round-trips byte-exact");
     }
 
     #[test]

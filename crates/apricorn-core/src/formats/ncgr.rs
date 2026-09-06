@@ -67,6 +67,19 @@ impl CharMapping {
             }),
         }
     }
+
+    /// The raw `GXOBJVRamModeChar` value (the inverse of
+    /// [`CharMapping::from_raw`]; used by the round-trip serializer).
+    #[must_use]
+    pub(crate) fn raw(self) -> u32 {
+        match self {
+            Self::TwoD => 0,
+            Self::OneD32K => 0x10,
+            Self::OneD64K => 0x0010_0010,
+            Self::OneD128K => 0x0020_0010,
+            Self::OneD256K => 0x0030_0010,
+        }
+    }
 }
 
 /// A parsed NCGR. Borrows the file bytes; see [`Ncgr::parse`].
@@ -247,6 +260,47 @@ impl<'a> Ncgr<'a> {
     pub fn cpos(&self) -> Option<(u16, u16)> {
         self.cpos
     }
+
+    /// Re-serializes the parsed NCGR into its container form.
+    ///
+    /// Byte-exact: the parse retains every stored field (the container
+    /// version, the grid, the formats, `characterFmt`, the tile bytes, and
+    /// the CPOS pair), so this is the round-trip half of the parser guard
+    /// (`tests/roundtrip_hg.rs` re-serializes every NCGR in the ROM and
+    /// byte-compares against the original).
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let char_size = 8 + 0x18 + self.tiles.len();
+        let cpos_size = if self.cpos.is_some() { 0x10 } else { 0 };
+        let total = 0x10 + char_size + cpos_size;
+
+        let mut out = Vec::with_capacity(total);
+        out.extend_from_slice(b"RGCN");
+        out.extend_from_slice(&0xFEFFu16.to_le_bytes());
+        out.extend_from_slice(&self.version.to_le_bytes());
+        out.extend_from_slice(&(total as u32).to_le_bytes());
+        out.extend_from_slice(&0x10u16.to_le_bytes());
+        out.extend_from_slice(&(u16::from(self.cpos.is_some()) + 1).to_le_bytes());
+        out.extend_from_slice(b"RAHC");
+        out.extend_from_slice(&(char_size as u32).to_le_bytes());
+        out.extend_from_slice(&self.height.to_le_bytes());
+        out.extend_from_slice(&self.width.to_le_bytes());
+        out.extend_from_slice(&self.pixel_fmt.raw().to_le_bytes());
+        out.extend_from_slice(&self.mapping.raw().to_le_bytes());
+        out.extend_from_slice(&self.character_fmt.to_le_bytes());
+        out.extend_from_slice(&(self.tiles.len() as u32).to_le_bytes());
+        out.extend_from_slice(&0x18u32.to_le_bytes());
+        out.extend_from_slice(self.tiles);
+
+        if let Some((w, h)) = self.cpos {
+            out.extend_from_slice(b"SOPC");
+            out.extend_from_slice(&0x10u32.to_le_bytes());
+            out.extend_from_slice(&0u32.to_le_bytes());
+            out.extend_from_slice(&w.to_le_bytes());
+            out.extend_from_slice(&h.to_le_bytes());
+        }
+        out
+    }
 }
 
 #[cfg(test)]
@@ -322,7 +376,18 @@ mod tests {
         ] {
             let mut data = build_ncgr(false);
             data[0x18 + 8..0x18 + 12].copy_from_slice(&raw.to_le_bytes());
-            assert_eq!(Ncgr::parse(&data).unwrap().mapping(), expected);
+            let ncgr = Ncgr::parse(&data).expect("mapping-mode NCGR must parse");
+            assert_eq!(ncgr.mapping(), expected);
+            assert_eq!(ncgr.to_bytes(), data, "round-trips the raw mapping");
+        }
+    }
+
+    #[test]
+    fn round_trips_synthetic_files() {
+        for with_cpos in [false, true] {
+            let data = build_ncgr(with_cpos);
+            let ncgr = Ncgr::parse(&data).expect("synthetic NCGR must parse");
+            assert_eq!(ncgr.to_bytes(), data, "byte-exact with and without CPOS");
         }
     }
 

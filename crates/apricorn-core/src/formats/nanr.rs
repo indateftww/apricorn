@@ -85,6 +85,17 @@ impl AnimElement {
             Self::Translate => 8,
         }
     }
+
+    /// The raw `animationElement` value (the inverse of
+    /// [`AnimElement::from_raw`]; used by the round-trip serializer).
+    #[must_use]
+    pub(crate) fn raw(self) -> u16 {
+        match self {
+            Self::Cell => 0,
+            Self::Srt => 1,
+            Self::Translate => 2,
+        }
+    }
 }
 
 /// How a sequence plays back (`playbackMode`,
@@ -117,6 +128,18 @@ impl PlayMode {
             _ => Err(NdsError::Invalid {
                 what: "unknown NANR playbackMode",
             }),
+        }
+    }
+
+    /// The raw `playbackMode` value (the inverse of
+    /// [`PlayMode::from_raw`]; used by the round-trip serializer).
+    #[must_use]
+    pub(crate) fn raw(self) -> u32 {
+        match self {
+            Self::Forward => 1,
+            Self::ForwardLoop => 2,
+            Self::Reverse => 3,
+            Self::ReverseLoop => 4,
         }
     }
 }
@@ -568,6 +591,122 @@ impl<'a> Nanr<'a> {
         let start = self.sequences.get(seq)?.frame_start;
         self.uaat.as_ref()?.frame_attr(start + frame)
     }
+
+    /// Re-serializes the parsed NANR into its container form.
+    ///
+    /// Byte-exact on retail-shaped files, with every layout constant
+    /// re-derived rather than copied: the KNBA header fields
+    /// (`frameOffset`, `resultOffset` right after the frame records,
+    /// `uaatOffset` at the pool end), each sequence's `frameDataOffset`
+    /// (always 8 × the bank-global frame start — pinned across all 596
+    /// retail banks), the frame markers, the whole UAAT pointer
+    /// derivation, and the LBAL offset table. The shared results pool is
+    /// carried verbatim, so the bank's deduplication is preserved.
+    /// (`tests/roundtrip_hg.rs` re-serializes every NANR in the ROM and
+    /// byte-compares against the original.)
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let n_seq = self.sequences.len();
+        let n_frames = self.total_frames();
+        let frame_off = 0x18 + 0x10 * n_seq;
+        let result_off = frame_off + 8 * n_frames;
+        let pool = self.sequences[0].pool;
+        let uaat_off = if self.uaat.is_some() {
+            result_off + pool.len()
+        } else {
+            0
+        };
+
+        // --- KNBA body: header, sequence records, frame records, pool ---
+        let mut body = vec![0u8; frame_off];
+        body[0..2].copy_from_slice(&(n_seq as u16).to_le_bytes());
+        body[2..4].copy_from_slice(&(n_frames as u16).to_le_bytes());
+        body[4..8].copy_from_slice(&0x18u32.to_le_bytes());
+        body[8..12].copy_from_slice(&(frame_off as u32).to_le_bytes());
+        body[0xC..0x10].copy_from_slice(&(result_off as u32).to_le_bytes());
+        body[0x14..0x18].copy_from_slice(&(uaat_off as u32).to_le_bytes());
+        for (i, seq) in self.sequences.iter().enumerate() {
+            let at = 0x18 + 0x10 * i;
+            let frame_count = seq.frames.len() as u16;
+            body[at..at + 2].copy_from_slice(&frame_count.to_le_bytes());
+            body[at + 2..at + 4].copy_from_slice(&seq.loop_start.to_le_bytes());
+            body[at + 4..at + 6].copy_from_slice(&seq.element.raw().to_le_bytes());
+            body[at + 6..at + 8].copy_from_slice(&1u16.to_le_bytes());
+            body[at + 8..at + 12].copy_from_slice(&seq.play_mode.raw().to_le_bytes());
+            body[at + 12..at + 16].copy_from_slice(&((8 * seq.frame_start) as u32).to_le_bytes());
+        }
+        for seq in &self.sequences {
+            for frame in &seq.frames {
+                body.extend_from_slice(&frame.result_off.to_le_bytes());
+                body.extend_from_slice(&frame.delay.to_le_bytes());
+                body.extend_from_slice(&0xBEEFu16.to_le_bytes());
+            }
+        }
+        body.extend_from_slice(pool);
+
+        // --- Optional UAAT block, pointers fully re-derived ---
+        if let Some(u) = &self.uaat {
+            let size = 0x10 + 0x10 * n_seq + 8 * n_frames;
+            let base = uaat_off + 8;
+            let ptrs_base = uaat_off + 0x10 + 0x0C * n_seq;
+            let seqattr_base = ptrs_base + 4 * n_frames;
+            let frameattr_base = seqattr_base + 4 * n_seq;
+            body.extend_from_slice(b"TAAU");
+            body.extend_from_slice(&(size as u32).to_le_bytes());
+            body.extend_from_slice(&(n_seq as u16).to_le_bytes());
+            body.extend_from_slice(&1u16.to_le_bytes());
+            body.extend_from_slice(&8u32.to_le_bytes());
+            for (i, seq) in self.sequences.iter().enumerate() {
+                body.extend_from_slice(&(seq.frames.len() as u16).to_le_bytes());
+                body.extend_from_slice(&0xBEEFu16.to_le_bytes());
+                body.extend_from_slice(&((seqattr_base - base + 4 * i) as u32).to_le_bytes());
+                body.extend_from_slice(
+                    &((ptrs_base - base + 4 * seq.frame_start) as u32).to_le_bytes(),
+                );
+            }
+            for j in 0..n_frames {
+                body.extend_from_slice(&((frameattr_base - base + 4 * j) as u32).to_le_bytes());
+            }
+            for &attr in &u.seq_attrs {
+                body.extend_from_slice(&attr.to_le_bytes());
+            }
+            for &attr in &u.frame_attrs {
+                body.extend_from_slice(&attr.to_le_bytes());
+            }
+        }
+
+        // --- LBAL body: the derived offset table, then the strings ---
+        let table = 4 * n_seq;
+        let mut labl_body = vec![0u8; table];
+        for (i, seq) in self.sequences.iter().enumerate() {
+            let strings_off = labl_body.len() - table;
+            labl_body[4 * i..4 * i + 4].copy_from_slice(&(strings_off as u32).to_le_bytes());
+            labl_body.extend_from_slice(seq.label.as_bytes());
+            labl_body.push(0);
+        }
+
+        // --- Container ---
+        let kbna_size = 8 + body.len();
+        let labl_size = 8 + labl_body.len();
+        let total = 0x10 + kbna_size + labl_size + 0xC;
+        let mut out = Vec::with_capacity(total);
+        out.extend_from_slice(b"RNAN");
+        out.extend_from_slice(&0xFEFFu16.to_le_bytes());
+        out.extend_from_slice(&self.version.to_le_bytes());
+        out.extend_from_slice(&(total as u32).to_le_bytes());
+        out.extend_from_slice(&0x10u16.to_le_bytes());
+        out.extend_from_slice(&3u16.to_le_bytes());
+        out.extend_from_slice(b"KNBA");
+        out.extend_from_slice(&(kbna_size as u32).to_le_bytes());
+        out.extend_from_slice(&body);
+        out.extend_from_slice(b"LBAL");
+        out.extend_from_slice(&(labl_size as u32).to_le_bytes());
+        out.extend_from_slice(&labl_body);
+        out.extend_from_slice(b"TXEU");
+        out.extend_from_slice(&0xCu32.to_le_bytes());
+        out.extend_from_slice(&[0u8; 4]);
+        out
+    }
 }
 
 /// Parses and fully validates a UAAT block embedded at `uaat_off` of the
@@ -860,6 +999,12 @@ mod tests {
                 (false, None) => {}
                 _ => panic!("UAAT presence mismatch"),
             }
+
+            assert_eq!(
+                nanr.to_bytes(),
+                data,
+                "byte-exact with and without the UAAT block"
+            );
         }
     }
 

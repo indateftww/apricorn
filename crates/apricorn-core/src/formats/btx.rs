@@ -98,6 +98,19 @@ impl TexFmt {
         }
     }
 
+    /// The raw `GXTexFmt` value (the inverse of [`TexFmt::from_raw`];
+    /// used by the round-trip serializer).
+    #[must_use]
+    pub(crate) fn raw(self) -> u32 {
+        match self {
+            Self::A3i5 => 1,
+            Self::Pltt4 => 2,
+            Self::Pltt16 => 3,
+            Self::Pltt256 => 4,
+            Self::A5i3 => 6,
+        }
+    }
+
     /// Bits per pixel: 4 or 8.
     #[must_use]
     pub fn bpp(self) -> u8 {
@@ -237,6 +250,21 @@ pub struct Btx<'a> {
     /// `plttInfo.flag` bit 15 (`NNS_G3D_RESPLTT_USEPLTT4`): the file's
     /// palettes are 16-byte 4-color sets.
     uses_pltt4: bool,
+    /// The texture dictionary's trie node array, verbatim. The nodes are
+    /// a NitroSDK writer artifact (a binary-search trie over the names)
+    /// the engine never needs — lookups are linear — so the round-trip
+    /// serializer copies them instead of re-running the SDK's
+    /// trie-construction algorithm.
+    tex_nodes: &'a [u8],
+    /// The palette dictionary's trie node array, verbatim (see
+    /// [`Btx::tex_nodes`]).
+    pltt_nodes: &'a [u8],
+    /// The `tex4x4Info` `ofsTex` garbage pointer (see the module docs:
+    /// never validated on any retail file, meaningless, kept verbatim).
+    t44_ofs_tex: u32,
+    /// The `tex4x4Info` `ofsTexPlttIdx` garbage pointer (see
+    /// [`Btx::t44_ofs_tex`]).
+    t44_ofs_pltt_idx: u32,
 }
 
 /// Whether `data` begins with a BTX0 header.
@@ -246,13 +274,16 @@ pub fn is_btx(data: &[u8]) -> bool {
 }
 
 /// A dictionary's derived layout (`NNSG3dResDict`), all validated.
-struct Dict {
+struct Dict<'a> {
     /// `numEntry` (1–126 on retail files).
     num: usize,
     /// `sizeDictBlk` — the whole dictionary, header through name slots.
     size_blk: usize,
     /// `ofsEntry`, dictionary-relative: the single entry header.
     ofs_entry: usize,
+    /// The `(numEntry + 1)` trie nodes, verbatim (a writer artifact;
+    /// contents unvalidated — see [`Btx::tex_nodes`]).
+    nodes: &'a [u8],
 }
 
 /// Parses and validates one dictionary.
@@ -273,7 +304,11 @@ struct Dict {
 /// (`== 4 + sizeUnit*numEntry`) and `sizeDictBlk` (`== ofsEntry + 4 +
 /// sizeUnit*numEntry + 16*numEntry`) are all fully derived on retail
 /// files, so each is validated rather than trusted.
-fn parse_dict(data: &[u8], off: usize, size_unit: usize) -> Result<(Dict, Vec<&str>), NdsError> {
+fn parse_dict<'a>(
+    data: &'a [u8],
+    off: usize,
+    size_unit: usize,
+) -> Result<(Dict<'a>, Vec<&'a str>), NdsError> {
     if data.len() < off + 8 {
         return Err(NdsError::Truncated {
             what: "BTX0 dictionary header",
@@ -353,6 +388,7 @@ fn parse_dict(data: &[u8], off: usize, size_unit: usize) -> Result<(Dict, Vec<&s
             num,
             size_blk,
             ofs_entry,
+            nodes: &data[off + 8..off + ofs_entry],
         },
         names,
     ))
@@ -452,7 +488,8 @@ impl<'a> Btx<'a> {
 
         // tex4x4Info: retail ships no COMP4x4 textures (size zero, the
         // same dictionary at 0x3C); its data pointers are garbage on
-        // every retail file and are never validated.
+        // every retail file and are never validated — but they are kept
+        // verbatim so the round-trip serializer can reproduce them.
         if u32le(data, t + 0x18)? != 0 {
             return Err(NdsError::Invalid {
                 what: "TEX0 tex4x4Info vram key (always zero)",
@@ -473,6 +510,8 @@ impl<'a> Btx<'a> {
                 what: "TEX0 tex4x4Info flag (always zero)",
             });
         }
+        let t44_ofs_tex = u32le(data, t + 0x24)?;
+        let t44_ofs_pltt_idx = u32le(data, t + 0x28)?;
 
         // plttInfo
         if u32le(data, t + 0x2C)? != 0 {
@@ -627,6 +666,10 @@ impl<'a> Btx<'a> {
             tex_data,
             pltt_data,
             uses_pltt4: flag & 0x8000 != 0,
+            tex_nodes: tex_dict.nodes,
+            pltt_nodes: pltt_dict.nodes,
+            t44_ofs_tex,
+            t44_ofs_pltt_idx,
         })
     }
 
@@ -686,6 +729,141 @@ impl<'a> Btx<'a> {
     pub fn palette_by_name(&self, name: &str) -> Option<&BtxPalette<'a>> {
         self.palettes.iter().find(|pltt| pltt.name == name)
     }
+
+    /// Re-serializes the parsed BTX into its container form.
+    ///
+    /// Byte-exact: every field the parser validates is re-derived here
+    /// (the dictionary offsets, `sizeTex`/`sizePltt`, `ofsTex`/
+    /// `ofsPlttData`, the `TEXIMAGE_PARAM`/`word1` bit fields, and both
+    /// dictionaries' headers and offsets), so this is the round-trip
+    /// half of the parser guard (`tests/roundtrip_hg.rs` re-serializes
+    /// every BTX in the ROM and byte-compares against the original).
+    ///
+    /// The two fields that are *not* derivable are copied verbatim from
+    /// the retained parse state: the dictionaries' trie node arrays
+    /// (a writer artifact — see [`Btx::tex_nodes`]) and the `tex4x4Info`
+    /// garbage pointers (see [`Btx::t44_ofs_tex`]). Name-slot padding
+    /// after each dictionary name is re-written as zeros, which the
+    /// pinned retail scan confirmed matches every file.
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let n_tex = self.textures.len();
+        let n_pltt = self.palettes.len();
+
+        // Both dictionaries' layouts are fully derived (and validated at
+        // parse time), so re-derive them: ofsEntry == 12 + 4*num, ofsName
+        // == 4 + sizeUnit*num, sizeDictBlk == ofsEntry + ofsName + 16*num.
+        let tex_ofs_entry = 12 + 4 * n_tex;
+        let tex_ofs_name = 4 + 8 * n_tex;
+        let tex_blk = tex_ofs_entry + tex_ofs_name + 16 * n_tex;
+        let pltt_ofs_entry = 12 + 4 * n_pltt;
+        let pltt_ofs_name = 4 + 4 * n_pltt;
+        let pltt_blk = pltt_ofs_entry + pltt_ofs_name + 16 * n_pltt;
+        let pltt_dict_off = 0x3C + tex_blk;
+        let ofs_tex = pltt_dict_off + pltt_blk;
+        let ofs_pltt = ofs_tex + self.tex_data.len();
+        let total = 0x14 + ofs_pltt + self.pltt_data.len();
+
+        let mut out = Vec::with_capacity(total);
+
+        // NNS-G3D container header: one TEX0 block at 0x14 that ends the
+        // file.
+        out.extend_from_slice(b"BTX0");
+        out.extend_from_slice(&0xFEFFu16.to_le_bytes());
+        out.extend_from_slice(&0x0001u16.to_le_bytes());
+        out.extend_from_slice(&(total as u32).to_le_bytes());
+        out.extend_from_slice(&0x10u16.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&0x14u32.to_le_bytes());
+
+        // TEX0 block header.
+        out.extend_from_slice(b"TEX0");
+        out.extend_from_slice(&((total - 0x14) as u32).to_le_bytes());
+
+        // texInfo.
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&((self.tex_data.len() / 8) as u16).to_le_bytes());
+        out.extend_from_slice(&0x3Cu16.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&(ofs_tex as u32).to_le_bytes());
+
+        // tex4x4Info: no COMP4x4 data, dictionary mirrored at 0x3C, and
+        // the two data pointers are the retail garbage kept verbatim.
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0x3Cu16.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&self.t44_ofs_tex.to_le_bytes());
+        out.extend_from_slice(&self.t44_ofs_pltt_idx.to_le_bytes());
+
+        // plttInfo.
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&((self.pltt_data.len() / 8) as u16).to_le_bytes());
+        out.extend_from_slice(&(u16::from(self.uses_pltt4) << 15).to_le_bytes());
+        out.extend_from_slice(&(pltt_dict_off as u16).to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&(ofs_pltt as u32).to_le_bytes());
+
+        // Texture dictionary: header, verbatim trie nodes, entry header,
+        // packed TEXIMAGE_PARAM/word1 pairs, then the name slots.
+        out.push(0);
+        out.push(n_tex as u8);
+        out.extend_from_slice(&(tex_blk as u16).to_le_bytes());
+        out.extend_from_slice(&8u16.to_le_bytes());
+        out.extend_from_slice(&(tex_ofs_entry as u16).to_le_bytes());
+        out.extend_from_slice(self.tex_nodes);
+        out.extend_from_slice(&8u16.to_le_bytes());
+        out.extend_from_slice(&(tex_ofs_name as u16).to_le_bytes());
+        for tex in &self.textures {
+            // width == 8 << exp, so the exponent is the log2 of width/8
+            // (both sides validated at parse time).
+            let width_exp = (tex.width / 8).trailing_zeros();
+            let height_exp = (tex.height / 8).trailing_zeros();
+            let param = (tex.offset / 8) as u32
+                | (width_exp << 20)
+                | (height_exp << 23)
+                | (tex.fmt.raw() << 26)
+                | (u32::from(tex.color0_transparent) << 29);
+            let word1 = 0x8000_0000 | (u32::from(tex.height) << 11) | u32::from(tex.width);
+            out.extend_from_slice(&param.to_le_bytes());
+            out.extend_from_slice(&word1.to_le_bytes());
+        }
+        for tex in &self.textures {
+            write_name_slot(&mut out, tex.name);
+        }
+
+        // Palette dictionary: header, verbatim trie nodes, entry header,
+        // packed base/word1 pairs, then the name slots.
+        out.push(0);
+        out.push(n_pltt as u8);
+        out.extend_from_slice(&(pltt_blk as u16).to_le_bytes());
+        out.extend_from_slice(&8u16.to_le_bytes());
+        out.extend_from_slice(&(pltt_ofs_entry as u16).to_le_bytes());
+        out.extend_from_slice(self.pltt_nodes);
+        out.extend_from_slice(&4u16.to_le_bytes());
+        out.extend_from_slice(&(pltt_ofs_name as u16).to_le_bytes());
+        for pltt in &self.palettes {
+            out.extend_from_slice(&((pltt.offset / 8) as u16).to_le_bytes());
+            out.extend_from_slice(&pltt.word1.to_le_bytes());
+        }
+        for pltt in &self.palettes {
+            write_name_slot(&mut out, pltt.name);
+        }
+
+        // The two data areas, verbatim (each texture's/palette's bytes
+        // are slices into them).
+        out.extend_from_slice(self.tex_data);
+        out.extend_from_slice(self.pltt_data);
+        out
+    }
+}
+
+/// Appends `name` and zero-pads to the dictionary's fixed 16-byte slot.
+/// A name may fill all 16 bytes with no terminator; the parse guarantees
+/// the length fits, and the retail scan pinned the padding as zeros.
+fn write_name_slot(out: &mut Vec<u8>, name: &str) {
+    out.extend_from_slice(name.as_bytes());
+    out.resize(out.len() + (16 - name.len()), 0);
 }
 
 #[cfg(test)]
@@ -868,6 +1046,8 @@ mod tests {
             Some(32)
         );
         assert!(btx.texture_by_name("missing").is_none());
+
+        assert_eq!(btx.to_bytes(), data, "round-trips byte-exact");
     }
 
     #[test]
@@ -892,6 +1072,24 @@ mod tests {
         assert_eq!(shadow.declared_size(), 64);
         assert_eq!(shadow.data().len(), 32);
         assert_eq!(btx.texture_data().len(), 160);
+
+        assert_eq!(btx.to_bytes(), data, "clamped file round-trips byte-exact");
+    }
+
+    #[test]
+    fn round_trips_verbatim_writer_artifacts() {
+        // The two tex4x4Info data pointers are garbage on every retail
+        // file — never validated, never derived — so the serializer must
+        // copy them verbatim. Patch nonzero values in and confirm they
+        // survive the round trip (along with the trie nodes, which
+        // build_btx leaves mostly zero).
+        let mut data = build_btx();
+        data[0x14 + 0x24..0x14 + 0x28].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
+        data[0x14 + 0x28..0x14 + 0x2C].copy_from_slice(&0x0BAD_F00Du32.to_le_bytes());
+        data[0x14 + 0x3C + 8] = 0x7F; // texture trie node byte
+
+        let btx = Btx::parse(&data).expect("garbage-patched BTX must parse");
+        assert_eq!(btx.to_bytes(), data, "garbage pointers and nodes survive");
     }
 
     #[test]
