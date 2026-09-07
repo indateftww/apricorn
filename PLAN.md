@@ -126,17 +126,36 @@ apricorn-core replays through the same corpus machinery in Phase 4+.
 
 Minimal real-time engine; the "it draws something" phase.
 
-- [ ] NDS hardware study (moved from Phase 0): 2D engine — BG modes, OAM
+- [x] NDS hardware study (moved from Phase 0): 2D engine — BG modes, OAM
       sprites, affine — plus NitroSDK conventions, learned as needed to
       model the layers correctly.
-- [ ] winit + wgpu renderer with an NDS-style logical layer model:
+      → `docs/nds-2d.md`; OAM and affine modeled only (rendering deferred),
+      extended palettes deferred (both Phase 3 apps configure none).
+- [x] winit + wgpu renderer with an NDS-style logical layer model:
       two screens, BG layers, sprite/OAM layer, palettes — so *logical frame*
       comparison (draw-lists, not pixels) is possible from the start.
-- [ ] Fixed-timestep loop, input abstraction (keyboard/gamepad now, touch later).
-- [ ] Decode and display: title screen statics, intro movie, copyright screen —
+      → `apricorn-core::frame` (pure-data model), `apricorn-gfx` (deterministic
+      CPU rasterizer, no GPU in CI), `apricorn-desktop` (winit 0.30.13 +
+      wgpu 30.0.1 presenter) — topology and rationale in `docs/gfx.md`.
+      OAM layer is modeled but not rasterized (first sprite scene adds it).
+- [x] Fixed-timestep loop, input abstraction (keyboard/gamepad now, touch later).
+      → `apricorn-desktop::runner::Pacer` (16,714,917 ns/tick accumulator,
+      spiral-of-death clamp, clock-skew immune; paces only, never feeds
+      state), `apricorn-core::input` (`REG_KEYXY` bits; touch type present,
+      input deferred). Gamepad deferred.
+- [x] Decode and display: title screen statics, intro movie, copyright screen —
       first end-to-end milestone using real assets.
+      → `apricorn_core::app` (`intro_copyright`, `title_screen` — ports of the
+      pret scenes), golden raster hashes in `tests/raster_hg.rs` (hashes
+      only), `apricorn-gfx-dump` + `scripts/demo.ps1` for headless review.
+      Honest scope: the intro movie is the **copyright beat only** (scenes
+      2–5 need sprites/3D — their phases); the title's 3D BG0 renders as the
+      deferred layer it is; "TOUCH TO START" text is Phase 4.
 
 **Exit:** engine boots from extracted assets and shows the HGSS title screen.
+— Met 2026-09-07: `cargo run -p apricorn-desktop` plays the copyright beat,
+Game Freak logo, and the title screen from the real ROM; `tests/raster_hg.rs`
+pins the same pixels by SHA-1 (details: `docs/gfx.md`).
 
 ---
 
