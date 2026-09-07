@@ -166,7 +166,14 @@ pins the same pixels by SHA-1 (details: `docs/gfx.md`).
       → `apricorn-core::data` (`GameData::load` parses personal/growtbl/
       waza/item_data/wotbl/evo/pms straight from the ROM, strict-layout
       validated), `tests/data_hg.rs`, `docs/game-data.md`
-- [ ] Message/text system decoding, with the game's variable formatting.
+- [x] Message/text system decoding, with the game's variable formatting.
+      → `apricorn-core::text`: committed generation charmap
+      (`apricorn-tools gen-charmap`, cross-checked against pret's
+      `charmap.txt` by `tests/charmap_hg.rs`), strict decode of all
+      49,984 messages (charmap chars, `0xFFFE` control blocks, packed
+      TRNAME) with byte-identical reassembly, `GameString` +
+      `String16_FormatInteger` quirks, and `MessageFormat` placeholder
+      expansion (`tests/text_hg.rs`, `docs/text.md`)
 - [ ] RNG implementation (LCG) + differential-tested against `arm-runner`.
 - [ ] Save format: read + write original HGSS save blobs, checksums included;
       a real retail `.sav` must load correctly.

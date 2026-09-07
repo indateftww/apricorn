@@ -20,6 +20,7 @@ pub mod formats;
 pub mod frame;
 pub mod input;
 pub mod nds;
+pub mod text;
 
 /// Semantic version of the engine's state-machine / trace format.
 ///

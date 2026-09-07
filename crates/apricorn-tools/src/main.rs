@@ -16,9 +16,14 @@
 //! plus a JSON manifest (see `docs/extraction.md`).
 //! `convert <rom> <out-dir>` — the conversion step: raw formats → engine
 //! cache chunks plus a JSON manifest (see `docs/conversion.md`).
+//! `gen-charmap <charmap.txt> <out.rs>` — regenerate the committed
+//! generation charmap table `apricorn-core/src/text/charmap.rs` from a
+//! pret `charmap.txt` (one-time codegen; the committed file is
+//! cross-checked against the source by `tests/charmap_hg.rs`).
 
 mod convert;
 mod extract;
+mod gen_charmap;
 
 use std::process::ExitCode;
 
@@ -54,6 +59,7 @@ fn main() -> ExitCode {
         4 if args[0] == "sdat" && args[3] == "list" => return sdat(&args[1], &args[2], true),
         3 if args[0] == "extract" => return extract::extract(&args[1], &args[2]),
         3 if args[0] == "convert" => return convert::convert(&args[1], &args[2]),
+        3 if args[0] == "gen-charmap" => return gen_charmap::generate(&args[1], &args[2]),
         _ => {}
     }
     println!("apricorn-tools — ROM and asset pipeline (PLAN.md Phase 1)");
@@ -65,6 +71,10 @@ fn main() -> ExitCode {
     println!("       apricorn-tools sdat <rom.nds> <nitrofs-path> [list]");
     println!("       apricorn-tools extract <rom.nds> <out-dir>");
     println!("       apricorn-tools convert <rom.nds> <out-dir>");
+    println!(
+        "       apricorn-tools gen-charmap <charmap.txt> <out.rs>  (regenerate \
+         apricorn-core/src/text/charmap.rs)"
+    );
     ExitCode::from(64)
 }
 
