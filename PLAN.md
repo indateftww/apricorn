@@ -174,7 +174,11 @@ pins the same pixels by SHA-1 (details: `docs/gfx.md`).
       TRNAME) with byte-identical reassembly, `GameString` +
       `String16_FormatInteger` quirks, and `MessageFormat` placeholder
       expansion (`tests/text_hg.rs`, `docs/text.md`)
-- [ ] RNG implementation (LCG) + differential-tested against `arm-runner`.
+- [x] RNG implementation (LCG) + differential-tested against `arm-runner`.
+      → `apricorn-core::rng` (`Lcrng` — LCRandom/PRandom/LCRandRange
+      and the mon-encryption recurrence), `tests/rng_hg.rs`
+      (apricorn-harness: engine vs the original pinned functions,
+      draw by draw, ROM-gated), `docs/rng.md`
 - [ ] Save format: read + write original HGSS save blobs, checksums included;
       a real retail `.sav` must load correctly.
 - [ ] Game-state machine: boot → title → new game → Oak intro → name entry.
