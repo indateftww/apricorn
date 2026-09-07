@@ -164,11 +164,15 @@ through `G2_SetBlendAlpha` / `G2_SetBlendBrightness`).
 Per pixel: find the topmost visible pixel whose *source plane* is in
 `plane1` (call it the first target); alpha blend takes the second
 target as the next plane-pixel below whose source plane is in `plane2`,
-output channel `≈ (first·EVA + second·EBV) / 16` per hardware rounding
-— and Phase 3 computes it as `(first·EVA + second·EBV) >> 4` with the
-same clamping, matching melonDS's software path, which is what the
-oracle-equivalence story will compare against. If no plane1 pixel
-covers, the pixel passes through unblended. HeartGold's fades drive
+output channel `≈ (first·EVA + second·EBV) / 16` — the 5-bit weights
+**clamp to 16** (values 17–31 in the register behave as 16, so
+`G2_SetBlendAlpha(…, 31, 0)` is the identity "first target whole"),
+and Phase 3 computes it as `(first·EVA + second·EBV + 8) >> 4` with
+that clamp — the `+ 8` the round-to-nearest half-step — matching
+melonDS's software path (`GPU2D.cpp`'s register clamp, `GPU2D_Soft.h`'s
+`ColorBlend4`), which is what the oracle-equivalence story will
+compare against. If no plane1 pixel covers, the pixel passes through
+unblended. HeartGold's fades drive
 this directly: the copyright beat's 60-frame fade is
 `ev = counter * 31 / 60` written into EVA/EBV against the OBJ plane
 (empty) — i.e. a fade to the backdrop; the title's logo fade ramps

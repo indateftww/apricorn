@@ -17,10 +17,12 @@
 //!   effect is alpha, the rasterizer looks below it for the topmost
 //!   pixel whose plane is in the second-target mask — the backdrop
 //!   is the bottom-most plane — and emits
-//!   `(first·EVA + second·EBV) >> 4` per channel, clamped (the
-//!   hardware's 5-bit weights over 16). With no second target the
-//!   first target shows unblended; a topmost pixel outside the
-//!   first-target mask always passes through unblended.
+//!   `(first·EVA + second·EBV + 8) >> 4` per channel, clamped. The
+//!   5-bit register weights **clamp to 16** and the `+ 8` is the
+//!   round-to-nearest half-step, both exactly as melonDS's software
+//!   path (the future harness's comparison target). With no second
+//!   target the first target shows unblended; a topmost pixel outside
+//!   the first-target mask always passes through unblended.
 //! * **Master brightness** applies last, to the whole screen:
 //!   up is `c + (255 - c)·value >> 4`, down is `c - c·value >> 4`
 //!   (the register's 5-bit weight, value 16 reaches the limit).
@@ -278,12 +280,18 @@ fn sample_layer<S: AssetSource + ?Sized>(
     palette.get(index).copied()
 }
 
-/// The alpha blend itself: `(first·EVA + second·EBV) >> 4` per
-/// channel, clamped — the hardware's 5-bit weights over 16
-/// (`BLDALPHA`).
+/// The alpha blend itself: `(first·EVA + second·EBV + 8) >> 4` per
+/// channel, clamped — the hardware's weights over 16 with the
+/// half-step rounding, both matching melonDS's software path exactly
+/// (`GPU2D.cpp`'s `BLDALPHA` write clamps EVA/EBV to 16 — so
+/// `G2_SetBlendAlpha(…, 31, 0)` is the *identity* "first target
+/// whole", not a brightening — and `GPU2D_Soft.h`'s `ColorBlend4`
+/// rounds with `+ 8`).
 fn alpha_blend(first: [u8; 4], second: [u8; 4], eva: u8, ebv: u8) -> [u8; 4] {
+    let eva = u32::from(eva.min(16));
+    let ebv = u32::from(ebv.min(16));
     let mix = |a: u8, b: u8| {
-        let v = (u32::from(a) * u32::from(eva) + u32::from(b) * u32::from(ebv)) >> 4;
+        let v = (u32::from(a) * eva + u32::from(b) * ebv + 8) >> 4;
         u8::try_from(v.min(0xFF)).expect("clamped to u8")
     };
     [

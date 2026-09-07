@@ -430,20 +430,20 @@ fn alpha_blend_mixes_the_first_and_second_targets() {
     };
 
     let [main, _] = render(&frame, &store);
-    // (255·8 + 0·8) >> 4 = 127 for r; b symmetrically; g stays 0.
-    assert_eq!(main.pixel(0, 0), [127, 0, 127, 255]);
+    // (255·8 + 0·8 + 8) >> 4 = 128 for r; b symmetrically; g stays 0.
+    assert_eq!(main.pixel(0, 0), [128, 0, 128, 255]);
 
-    // Weights: EVA 31, EBV 0 → the first target alone.
+    // Weights: EVA 31 clamps to 16 (the register's 0-16 range) —
+    // the first target alone, exactly.
     let mut frame = frame;
     frame.main.blend.eva = 31;
     frame.main.blend.ebv = 0;
     let [main, _] = render(&frame, &store);
     assert_eq!(main.pixel(0, 0), [255, 0, 0, 255], "EBV 0: pure first");
-    // EVA 0, EBV 31 → the second target alone.
+    // EVA 0, EBV 31 clamps to 16 → the second target alone.
     frame.main.blend.eva = 0;
     frame.main.blend.ebv = 31;
     let [main, _] = render(&frame, &store);
-    // (0 + 255·31) >> 4 = 493 → clamped to 255.
     assert_eq!(main.pixel(0, 0), [0, 0, 255, 255], "EVA 0: pure second");
 }
 
@@ -502,8 +502,8 @@ fn blending_rules_for_untargeted_and_unmatched_pixels() {
     let mut frame = frame;
     frame.main.bgs[0].enabled = false;
     let [main, _] = render(&frame, &store);
-    // r: (255·8 + 255·8) >> 4 = 255; g/b: (0 + 255·8) >> 4 = 127.
-    assert_eq!(main.pixel(0, 0), [255, 127, 127, 255], "BG1 over white BD");
+    // r: (255·8 + 255·8 + 8) >> 4 = 255; g/b: (0 + 255·8 + 8) >> 4 = 128.
+    assert_eq!(main.pixel(0, 0), [255, 128, 128, 255], "BG1 over white BD");
 
     // plane2 empty: no second target anywhere — the first target
     // shows unblended.
