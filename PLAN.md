@@ -161,8 +161,11 @@ pins the same pixels by SHA-1 (details: `docs/gfx.md`).
 
 ## Phase 4 — Core game state & data
 
-- [ ] Personal/base-stat tables, species/moves/items data (from ROM tables —
+- [x] Personal/base-stat tables, species/moves/items data (from ROM tables —
       zero hand-typing).
+      → `apricorn-core::data` (`GameData::load` parses personal/growtbl/
+      waza/item_data/wotbl/evo/pms straight from the ROM, strict-layout
+      validated), `tests/data_hg.rs`, `docs/game-data.md`
 - [ ] Message/text system decoding, with the game's variable formatting.
 - [ ] RNG implementation (LCG) + differential-tested against `arm-runner`.
 - [ ] Save format: read + write original HGSS save blobs, checksums included;
