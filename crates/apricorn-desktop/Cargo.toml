@@ -12,9 +12,10 @@ path = "src/main.rs"
 
 [dependencies]
 apricorn-core.workspace = true
-
-# winit / wgpu are added in Phase 3; deliberately absent so the workspace
-# stays fast to build until the renderer scaffold lands.
+apricorn-gfx.workspace = true
+pollster = "1.0.1"
+wgpu = "30.0.1"
+winit = "0.30"
 
 [lints]
 workspace = true

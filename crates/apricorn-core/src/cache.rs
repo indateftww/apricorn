@@ -204,11 +204,16 @@ fn char_from_code(code: u8) -> Result<CharMapping, NdsError> {
 /// mapping 0→0 and 31→255).
 fn rgba555(color: u16) -> [u8; 4] {
     let expand = |v: u16| (v << 3 | v >> 2) as u8;
-    // BGR555: blue in bits 0..5, green in 5..10, red in 10..15.
+    // BGR555 (the name reads msb-first: B, G, R): red occupies bits
+    // 0..5, green 5..10, blue 10..15 — GBATEK's layout, the SDK's
+    // GX_RGB macro (`r | g << 5 | b << 10`), and melonDS's expansion
+    // all agree. The inverse reading (blue in the low bits) swapped
+    // R and B in every converted palette until 2026-09-07, caught by
+    // eyeball in the desktop window: yellow rendered cyan, blue red.
     [
-        expand(color >> 10 & 0x1F),
-        expand(color >> 5 & 0x1F),
         expand(color & 0x1F),
+        expand(color >> 5 & 0x1F),
+        expand(color >> 10 & 0x1F),
         0xFF,
     ]
 }
@@ -1377,7 +1382,8 @@ mod tests {
     /// Builds a NCLR with two stored 16-color palettes and a PMCP
     /// mapping three slots onto them (same layout as the format
     /// module's fixture), with BGR555 colors chosen to pin the 5→8-bit
-    /// expansion: white, full red, 1/32 green, white.
+    /// expansion: white, full blue (`0x7C00` = bits 10..15), 1/32
+    /// green, white.
     fn build_compressed_nclr() -> Vec<u8> {
         let colors: Vec<u8> = [0xFFFFu16, 0x7C00, 0x0020, 0xFFFF]
             .into_iter()
@@ -1537,12 +1543,12 @@ mod tests {
         let pal = Palette::parse(&chunk).expect("chunk parses");
         assert!(pal.is_16_color());
         assert!(!pal.is_extended());
-        // White, full red, 1/32 green, white: 31 -> 0xFF, 1 -> 0x08.
+        // White, full blue, 1/32 green, white: 31 -> 0xFF, 1 -> 0x08.
         assert_eq!(
             pal.rgba(),
             &[
                 [0xFF, 0xFF, 0xFF, 0xFF],
-                [0xFF, 0x00, 0x00, 0xFF],
+                [0x00, 0x00, 0xFF, 0xFF],
                 [0x00, 0x08, 0x00, 0xFF],
                 [0xFF, 0xFF, 0xFF, 0xFF],
             ]

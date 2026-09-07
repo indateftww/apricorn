@@ -21,6 +21,7 @@ missing_docs = "warn"
 [workspace.dependencies]
 # Workspace-internal crates
 apricorn-core = { path = "crates/apricorn-core" }
+apricorn-gfx = { path = "crates/apricorn-gfx" }
 
 [profile.release]
 lto = "thin"

@@ -13,6 +13,15 @@
 //! the SHA-1 of each screen's raw RGBA bytes, the same digests
 //! `apricorn-gfx-dump` prints, so the CLI, this test, and the future
 //! harness all pin identical pixels.
+
+//! 2026-09-07: every hash regenerated once, deliberately — the BGR555
+//! palette decode had R and B swapped (`cache::rgba555` read the
+//! format name's msb-first channel order as a bit order), caught by
+//! eyeball in the desktop window (the title logo rendered with
+//! yellow and blue exchanged). The copyright-beat screens' hashes
+//! survived the fix unchanged: their art is grayscale, invariant
+//! under the channel swap — only the colored title statics (the
+//! `fe2823e6…` top-LCD hash) and the frame-0 cover changed.
 //!
 //! Skips silently when `hg_usa.nds` is absent (each developer
 //! supplies their own ROM dump).
@@ -41,7 +50,7 @@ const GOLDEN: &[(u32, &str, &str)] = &[
     // under the un-faded blend; the top LCD's blank cover.
     (
         0,
-        "5a3d8dbf6ad60ee27c7aeb8b1edd9f567df372ec",
+        "5bd818d44e813bb3e3c1d9426aefa744e02044f1",
         "6328dca89ec034974f4cd2d6bc45019731ce06e3",
     ),
     // Mid-fade (counter 16, `ev` 8): EVA 23 clamps to 16 — the
@@ -49,7 +58,7 @@ const GOLDEN: &[(u32, &str, &str)] = &[
     // frame 0 pixel for pixel.
     (
         45,
-        "5a3d8dbf6ad60ee27c7aeb8b1edd9f567df372ec",
+        "5bd818d44e813bb3e3c1d9426aefa744e02044f1",
         "6328dca89ec034974f4cd2d6bc45019731ce06e3",
     ),
     // The fade's end (EVA 0, EBV 31→16): both engines black.
@@ -77,19 +86,19 @@ const GOLDEN: &[(u32, &str, &str)] = &[
     // deferred 3D BG0 and the cleared flash window.
     (
         320,
-        "075c603f7cce914343d0b8d9fbb48e3497325ae2",
+        "fe2823e642633bffb5698b4104872e56816458b5",
         "31c8daa3770fde1d76332d8aac4f53357adc1ce6",
     ),
     // Title statics are settled — the flash toggles a transparent
     // window — so 420 and 1000 match 320.
     (
         420,
-        "075c603f7cce914343d0b8d9fbb48e3497325ae2",
+        "fe2823e642633bffb5698b4104872e56816458b5",
         "31c8daa3770fde1d76332d8aac4f53357adc1ce6",
     ),
     (
         1000,
-        "075c603f7cce914343d0b8d9fbb48e3497325ae2",
+        "fe2823e642633bffb5698b4104872e56816458b5",
         "31c8daa3770fde1d76332d8aac4f53357adc1ce6",
     ),
 ];
