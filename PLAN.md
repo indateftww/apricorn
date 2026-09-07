@@ -179,8 +179,18 @@ pins the same pixels by SHA-1 (details: `docs/gfx.md`).
       and the mon-encryption recurrence), `tests/rng_hg.rs`
       (apricorn-harness: engine vs the original pinned functions,
       draw by draw, ROM-gated), `docs/rng.md`
-- [ ] Save format: read + write original HGSS save blobs, checksums included;
+- [x] Save format: read + write original HGSS save blobs, checksums included;
       a real retail `.sav` must load correctly.
+      → `apricorn-core::save` (the 512-KiB card container: dual slot
+      mirrors, 42-block layout computed by the original's own boot
+      arithmetic, chunk/footers/block/extra-chunk CRC-16-CCITT,
+      `Save_GetSaveFilesStatus` probe with the counter-wraparound
+      quirk, `save_game`'s alternating-slot write, `ReadExtraSaveChunk`
+      selection), ROM-measured size tables (45 pinned size stubs
+      called via arm-runner, `tests/save_hg.rs`), byte-identical
+      round-trip + status-matrix tests on synthesized retail-shaped
+      blobs plus a retail `hg.sav` gate (`tests/save.rs`),
+      `docs/save.md`
 - [ ] Game-state machine: boot → title → new game → Oak intro → name entry.
 
 **Exit:** new-game flow up to landing in the player's bedroom; original `.sav`

@@ -316,7 +316,9 @@ sLCRNG_State\tdata\t0x021D15A8\t4\t9069ca78e7450a285173431b3e52c5c25299e473\t.bs
     #[test]
     fn committed_arm9_table_parses() {
         let table = PinTable::arm9();
-        assert_eq!(table.pins().len(), 17, "12 code pins + 5 data pins");
+        // 12 math_util/SDK code pins + 5 math data pins, then the save
+        // chunk-table pins (45 code + 2 data) of Phase 4 step 4.
+        assert_eq!(table.pins().len(), 64, "17 math pins + 47 save pins");
         // The Phase 2 differential targets are all pinned.
         for name in [
             "SetLCRNGSeed",
