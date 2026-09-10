@@ -16,11 +16,13 @@ pub mod app;
 pub mod assets;
 pub mod cache;
 pub mod data;
+pub mod font;
 pub mod formats;
 pub mod frame;
 pub mod input;
 pub mod nds;
 pub mod rng;
+pub mod rtc;
 pub mod save;
 pub mod text;
 

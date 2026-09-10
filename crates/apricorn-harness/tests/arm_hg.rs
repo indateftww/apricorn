@@ -74,80 +74,23 @@ fn lcg_matches_the_c_reference() {
 
 // ===== Mersenne Twister ===============================================
 
-/// MT19937 as pret wrote it: the standard init, twist, and temper,
-/// with the SDK's 625-uninitialized sentinel (a fresh machine's
-/// `sMTRNG_Cycles` is 625, which makes the first draw re-seed with
-/// 5489 before twisting).
-struct Mt {
-    state: [u32; 624],
-    cycles: i32,
-}
-
-impl Mt {
-    /// `sMTRNG_Cycles` straight from the retail image's data pin: 625.
-    fn uninitialized() -> Self {
-        Self {
-            state: [0; 624],
-            cycles: 625,
-        }
-    }
-
-    fn set_seed(&mut self, seed: u32) {
-        self.state[0] = seed;
-        for i in 1..624 {
-            let prev = self.state[i - 1];
-            self.state[i] = 1812433253u32
-                .wrapping_mul(prev ^ (prev >> 30))
-                .wrapping_add(i as u32);
-        }
-        self.cycles = 624;
-    }
-
-    fn next(&mut self) -> u32 {
-        if self.cycles >= 624 {
-            if self.cycles == 625 {
-                self.set_seed(5489);
-            }
-            self.twist();
-        }
-        let mut val = self.state[self.cycles as usize];
-        self.cycles += 1;
-        val ^= val >> 11;
-        val ^= (val << 7) & 0x9D2C_5680;
-        val ^= (val << 15) & 0xEFC6_0000;
-        val ^= val >> 18;
-        val
-    }
-
-    fn twist(&mut self) {
-        let xor = [0u32, 0x9908_B0DF];
-        let val =
-            |state: &[u32; 624], i: usize| (state[i] & 0x8000_0000) | (state[i + 1] & 0x7FFF_FFFF);
-        for i in 0..227 {
-            let v = val(&self.state, i);
-            self.state[i] = self.state[i + 397] ^ (v >> 1) ^ xor[(v & 1) as usize];
-        }
-        for i in 227..623 {
-            let v = val(&self.state, i);
-            self.state[i] = self.state[i - 227] ^ (v >> 1) ^ xor[(v & 1) as usize];
-        }
-        let v = (self.state[623] & 0x8000_0000) | (self.state[0] & 0x7FFF_FFFF);
-        self.state[623] = self.state[396] ^ (v >> 1) ^ xor[(v & 1) as usize];
-        self.cycles = 0;
-    }
-}
+/// The differential reference is the engine's own
+/// `apicorn_core::rng::Mt19937` — the port of pret's
+/// `SetMTRNGSeed`/`MTRandom` (`src/math_util.c`) — so the retail
+/// image locks the engine implementation draw by draw (no local
+/// reference copy to drift from it).
+use apricorn_core::rng::Mt19937;
 
 #[test]
 fn mt_matches_the_c_reference() {
     let Some(mut arm9) = load() else { return };
 
     // Seeded stream: SetMTRNGSeed then 1300 draws (two twists).
-    let mut reference = Mt::uninitialized();
-    reference.set_seed(0x1234);
+    let mut reference = Mt19937::new(0x1234);
     call(&mut arm9, "SetMTRNGSeed", &[0x1234]);
     for i in 0..1300 {
         let got = call(&mut arm9, "MTRandom", &[]);
-        assert_eq!(got, reference.next(), "MTRandom draw {i}");
+        assert_eq!(got, reference.next_u32(), "MTRandom draw {i}");
     }
 
     // Fresh-image stream: without seeding, cycles == 625 (the image's
@@ -155,10 +98,10 @@ fn mt_matches_the_c_reference() {
     // SetMTRNGSeed(5489) reseed. The first loop left the global
     // mid-stream, so reload the image first.
     let Some(mut arm9) = load() else { return };
-    let mut reference = Mt::uninitialized();
+    let mut reference = Mt19937::uninitialized();
     for i in 0..1300 {
         let got = call(&mut arm9, "MTRandom", &[]);
-        assert_eq!(got, reference.next(), "unseeded MTRandom draw {i}");
+        assert_eq!(got, reference.next_u32(), "unseeded MTRandom draw {i}");
     }
 }
 

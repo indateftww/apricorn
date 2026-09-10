@@ -104,7 +104,9 @@ pub enum SaveError {
     /// would start a new game.
     NoSaveData,
     /// `LOAD_STATUS_TOTAL_FAIL`: no slot's chunks validate — the game
-    /// would refuse to continue.
+    /// erases and starts fresh behind the save-check's warning banner
+    /// ("The save file will be erased due to corruption or damage.",
+    /// `src/application/check_savedata.c`).
     Corrupt,
 }
 
@@ -424,7 +426,8 @@ impl SaveData {
     /// [`SaveError::NotACardBackup`] for a blob of the wrong size;
     /// [`SaveError::NoSaveData`] for a blank card (`NOT_EXIST` — the
     /// game would start a new game); [`SaveError::Corrupt`] when no
-    /// slot's chunks validate (`TOTAL_FAIL` — the game would refuse).
+    /// slot's chunks validate (`TOTAL_FAIL` — the game erases and
+    /// continues fresh, behind the save-check warning).
     /// A save whose newest generation lost a chunk loads with
     /// [`Self::slot_degraded`] set, exactly the case the original
     /// banners through.

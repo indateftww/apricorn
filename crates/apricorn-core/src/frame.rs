@@ -1,19 +1,25 @@
 //! The logical frame model — the 2D hardware state as pure data.
 //!
 //! One [`LogicalFrame`] is the complete observable video state at one
-//! tick: both engines' BG layer configuration, their blend and
-//! brightness units, the backdrop colors, and which engine drives
-//! which LCD. No pixel data lives here — layers *reference* loaded
+//! tick: both engines' BG layer configuration, their palette RAM
+//! (composed from [`PaletteLoad`]s at raster time), the message
+//! [`Window`]s printing into their layers, the blend and brightness
+//! units, the backdrop colors, and which engine drives which LCD. No
+//! pixel data lives here — layers and windows *reference* loaded
 //! assets through [`AssetId`] handles that the asset store (see
-//! `apicorn_core::assets`, Phase 3 step 4) resolves at raster time,
-//! so a frame is plain integers end to end: comparable with `==`,
-//! hashable, and serializable for the harness without touching a ROM.
+//! `apicorn_core::assets`) resolves at raster time, so a frame is
+//! plain data end to end: comparable with `==`, hashable, and
+//! serializable for the harness without touching a ROM.
 //!
 //! The field geometry mirrors the hardware study (`docs/nds-2d.md`,
 //! which cites the vendored NitroSDK headers and pret usage per fact):
 //! engines A (MAIN, `0x04000000`) and B (SUB, `0x04001000`), four text
 //! BG layers each under `BGxCNT`, one blend unit (`BLDCNT`/`BLDALPHA`)
 //! and one master-brightness unit per engine.
+//!
+//! Since the message-window model arrived (Phase 4), the frame is no
+//! longer `Copy` — windows and palette loads are `Vec`s — but stays
+//! `Clone`/`Eq`/`Default`, the whole comparison contract.
 
 /// A handle to one loaded asset in the engine's asset store.
 ///
@@ -131,9 +137,6 @@ pub struct BgLayer {
     pub char_base: u8,
     /// The layer's screen (map) asset.
     pub screen: Option<AssetId>,
-    /// The palette the layer decodes against (a per-layer reference:
-    /// both Phase 3 apps point every layer at one shared palette).
-    pub palette: Option<AssetId>,
     /// 4bpp or 8bpp (`BGxCNT` bit 7).
     pub color_mode: ColorMode,
     /// Map size (`BGxCNT` bits 13–14).
@@ -153,12 +156,227 @@ impl Default for BgLayer {
             enabled: false,
             char_base: 0,
             screen: None,
-            palette: None,
             color_mode: ColorMode::Bpp4,
             size: ScreenSize::W256xH256,
             scroll_x: 0,
             scroll_y: 0,
             priority: 0,
+        }
+    }
+}
+
+/// One tile-set asset placed in a char block — the model's stand-in
+/// for the `LoadCharData`-at-an-offset idiom. Every NCGR a layer's
+/// tilemap can name lands in the *same* char block at its own tile
+/// offset (the Oak speech's MAIN BG0 holds the intro art at tile 0,
+/// the frame graphics at 0x3D9, the frame again at 0x3E2), so a
+/// block is a list of placements and a tile index resolves against
+/// whichever placement covers it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TilePlacement {
+    /// The placed Tiles asset.
+    pub asset: AssetId,
+    /// The placement's tile offset within the char block.
+    pub tile: u16,
+}
+
+/// One palette-file load into the engine's BG palette RAM — the
+/// model of `GfGfxLoader_GXLoadPal` at an offset: a 16-color frame
+/// palette into bank 4, the font palettes at bank 12, a whole 0x200
+/// byte file over slots 0–15.
+///
+/// Loads are composed in order at raster time ([`EngineFrame`]):
+/// later loads overwrite earlier ones, exactly as palette RAM does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PaletteLoad {
+    /// The loaded palette asset (PMCP applied at placement).
+    pub asset: AssetId,
+    /// The RAM offset in colors — the load's byte offset over 2.
+    pub offset: u16,
+    /// How many colors land in RAM (the load's byte size over 2;
+    /// a whole-file load carries the file's color count).
+    pub colors: u16,
+}
+
+/// A text color triple — pret's `MAKE_TEXT_COLOR(fg, shadow, bg)`:
+/// palette *indices within the printing window's bank*, applied to
+/// glyph levels 1/2/3 at raster time (level 0 is transparent).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextColor {
+    /// The foreground index (level 1).
+    pub fg: u8,
+    /// The shadow index (level 2).
+    pub shadow: u8,
+    /// The background index (level 3) — also the window's fill.
+    pub bg: u8,
+}
+
+impl TextColor {
+    /// `MAKE_TEXT_COLOR(fg, shadow, bg)` — the fields in pret's
+    /// argument order (`fgColor = color >> 16`, `shadow = >> 8`,
+    /// `bg = >> 0`).
+    #[must_use]
+    pub const fn new(fg: u8, shadow: u8, bg: u8) -> Self {
+        Self { fg, shadow, bg }
+    }
+}
+
+/// One glyph placed in a window — the printer's unit of progress.
+///
+/// `x`/`y` are the window-relative pixels where the glyph's top-left
+/// landed (the `currentX`/`currentY` of the print step), in the
+/// window's *unscrolled* space: the [`Window::scroll`] translation
+/// applies to all content at once, the way `ScrollWindow` shifts the
+/// whole pixel buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowGlyph {
+    /// The font asset the glyph renders from.
+    pub font: AssetId,
+    /// The character code unit printed (1-based glyph id; the font's
+    /// own fallback applies past its table).
+    pub glyph: u16,
+    /// The window-relative X at print time.
+    pub x: u16,
+    /// The window-relative Y at print time.
+    pub y: u16,
+    /// The color triple active at print time.
+    pub color: TextColor,
+    /// The `{SIZE 200}` row-doubling table (pret's `glyphTable`
+    /// 0xFFFC): every other source row copies one pixel down —
+    /// the half-height large-print effect.
+    pub double_rows: bool,
+}
+
+/// A window's 9-slice frame — pret `DrawFrameAndWindow1/2`'s border,
+/// drawn into the tilemap *around* the window rect (one tile thick,
+/// from `x-1, y-1`) from the frame graphics placed in the window's
+/// own char block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowFrame {
+    /// The char-block tile offset the frame NCGR loaded at.
+    pub base_tile: u16,
+    /// The palette bank of the border's tilemap entries (the frame
+    /// NCLR loads 16 colors into this bank).
+    pub palette: u8,
+}
+
+/// The wait-for-input down arrow — `TextPrinter_DrawDownArrow`'s
+/// 2×2-tile animation, drawn into the tilemap one tile right of the
+/// window's bottom-right corner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowArrow {
+    /// The arrow's base tile (`sDownArrowBaseTile`; the four frames
+    /// live at `+18..+21` stepping by 4, the cleared state at
+    /// `+10/+11`).
+    pub base_tile: u16,
+    /// The animation position — one step per 8 held frames, walking
+    /// `sDownArrowTileOffsets` = {0, 1, 2, 1}.
+    pub index: u8,
+}
+
+/// The arrow animation's tile-offset cycle — pret's
+/// `sDownArrowTileOffsets` (`src/render_text.c`).
+pub const ARROW_TILE_OFFSETS: [u8; 4] = [0, 1, 2, 1];
+
+/// The {YESNO} focus indicator — pret `text.c`'s
+/// `RenderScreenFocusIndicatorTile`: a 24×32 blit of frame `index`
+/// out of the focus NCGR (`NARC_graphic_font` member 6, four
+/// 384-byte frames of twelve 8×8 4bpp tiles), landed at
+/// `((width - 3) · 8, 0)` of the window's pixel buffer with color 0
+/// transparent.
+///
+/// The blit is *into the buffer*: it erases under later glyphs and
+/// scrolls with the window. The model carries the print-time facts
+/// — the frame index and the cumulative [`Window::scroll`] when the
+/// indicator landed, so a later [`Window::scroll`] shifts it exactly
+/// as `ScrollWindow` would — and the raster re-derives the pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowFocus {
+    /// The focus NCGR (a 48-tile Tiles asset: frames of 12 tiles).
+    pub asset: AssetId,
+    /// The frame blitted — pret's `fieldNum`, `0..4`.
+    pub index: u8,
+    /// The window's cumulative scroll at blit time (the buffer row 0
+    /// the indicator landed on, in content coordinates).
+    pub scroll: u16,
+}
+
+/// A message window — pret's `Window` (`bg_window.c`) as content
+/// rather than a VRAM pixel buffer.
+///
+/// The original allocates `width × height` tiles of char block at
+/// `base_tile`, fills them, blits glyphs in, and points the layer's
+/// tilemap at them; the rasterizer here re-derives exactly that from
+/// the fill, the placed [`WindowGlyph`]s, and the scroll — so the
+/// model carries the printing state, never pixels. Geometry is in
+/// tiles on the owning BG's map (windows scroll with their layer,
+/// because the original's tilemap entries do).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Window {
+    /// The owning BG layer index (0–3).
+    pub bg: u8,
+    /// The rect's left edge, in tiles.
+    pub left: u8,
+    /// The rect's top edge, in tiles.
+    pub top: u8,
+    /// The rect's width, in tiles.
+    pub width: u8,
+    /// The rect's height, in tiles.
+    pub height: u8,
+    /// The palette bank of the window's tilemap entries — the bank
+    /// its fill and glyph indices decode against.
+    pub palette: u8,
+    /// The char-block tile offset of the window's pixel-buffer tiles
+    /// (provenance; the content model needs no asset there).
+    pub base_tile: u16,
+    /// The fill color index — `FillWindowPixelBuffer`'s current
+    /// value, the window's background.
+    pub fill: u8,
+    /// The glyphs printed so far, in print order (later glyphs draw
+    /// over earlier ones, as blits do).
+    pub glyphs: Vec<WindowGlyph>,
+    /// The cumulative pixel scroll (`ScrollWindow`'s shifting, in
+    /// the original applied to the buffer; here a translation).
+    pub scroll: u16,
+    /// The 9-slice border around the rect, if drawn.
+    pub frame: Option<WindowFrame>,
+    /// The wait indicator at the rect's bottom-right corner, if
+    /// shown.
+    pub arrow: Option<WindowArrow>,
+    /// The {YESNO} focus indicator blit into the buffer, if the
+    /// printed message carried a `{YESNO 0}` block.
+    pub focus: Option<WindowFocus>,
+}
+
+impl Window {
+    /// The window's interior rect in map pixels: `(x, y, w, h)`.
+    #[must_use]
+    pub fn rect_px(&self) -> (u16, u16, u16, u16) {
+        (
+            u16::from(self.left) * 8,
+            u16::from(self.top) * 8,
+            u16::from(self.width) * 8,
+            u16::from(self.height) * 8,
+        )
+    }
+}
+
+impl Default for Window {
+    fn default() -> Self {
+        Self {
+            bg: 0,
+            left: 0,
+            top: 0,
+            width: 0,
+            height: 0,
+            palette: 0,
+            base_tile: 0,
+            fill: 0,
+            glyphs: Vec::new(),
+            scroll: 0,
+            frame: None,
+            arrow: None,
+            focus: None,
         }
     }
 }
@@ -188,19 +406,29 @@ pub enum BlendEffect {
     None,
     /// Alpha blend: first target weighted EVA, second EBV.
     Alpha,
+    /// Brightness-down (bit 7): the first-target planes darken by
+    /// `Blend::evy` — the blend unit's own fade, `G2_SetBlendBrightness`'s
+    /// negative range, distinct from [`MasterBrightness`].
+    BrightnessDown,
+    /// Brightness-up (bit 6): the first-target planes lighten by
+    /// `Blend::evy` — `G2_SetBlendBrightness`'s positive range.
+    BrightnessUp,
 }
 
-/// One engine's alpha-blend unit — `BLDCNT`/`BLDALPHA`.
+/// One engine's blend unit — `BLDCNT`/`BLDALPHA`/`BLDY`.
 ///
-/// HeartGold's modeled beats only ever use the alpha effect; the
-/// fade-to-white/black effects of bits 6–7 are driven through master
-/// brightness ([`MasterBrightness`]) in both apps, so the model
-/// carries just `Alpha` for now — extending the enum is additive.
+/// The alpha effect carries its weights on [`Blend::eva`]/[`Blend::ebv`];
+/// the brightness effects carry the `BLDY` weight on [`Blend::evy`]
+/// (the sign that picked the effect is the effect itself —
+/// `GXx_SetBlendBrightness_` writes Down for a negative value, Up for a
+/// positive one). The rasterizer implements the alpha effect
+/// (`raster.rs`); the brightness effects are frame-model state for now —
+/// the Oak speech is their first user, and its fades end at evy 0.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Blend {
     /// The first-target plane mask (`plane::*` bits).
     pub plane1: u8,
-    /// The effect (none, or alpha blend).
+    /// The effect (none, alpha blend, or a brightness fade).
     pub effect: BlendEffect,
     /// The second-target plane mask (`plane::*` bits).
     pub plane2: u8,
@@ -208,6 +436,57 @@ pub struct Blend {
     pub eva: u8,
     /// Second-target weight, `BLDALPHA` bits 8–12 (0–31).
     pub ebv: u8,
+    /// The brightness effects' weight, `BLDY` bits 0–4 (0–16 in
+    /// practice).
+    pub evy: u8,
+}
+
+/// One edit made to a layer's tilemap buffer after its screen asset
+/// loaded — the model of pret's `BgTilemapRectChangePalette` and
+/// `FillBgTilemapRect` (`bg_window.c`), the direct map rewrites the
+/// scenes run between screen loads.
+///
+/// Edits are scene state, applied at raster time *after* the layer's
+/// screen asset, in push order — a later edit wins, exactly as the
+/// tilemap buffer's last write does. The scene owns the lifetime: a
+/// screen load or a tilemap clear for a layer drops that layer's
+/// earlier edits (the load overwrote the buffer; the clear zeroed it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TilemapEdit {
+    /// `BgTilemapRectChangePalette` — every entry in the rect decodes
+    /// against palette bank `bank` instead of its own.
+    Palette {
+        /// The edited layer (0–3).
+        bg: u8,
+        /// The palette bank the rect's entries take.
+        bank: u8,
+        /// The rect's left edge, in tiles.
+        left: u8,
+        /// The rect's top edge, in tiles.
+        top: u8,
+        /// The rect's width, in tiles.
+        width: u8,
+        /// The rect's height, in tiles.
+        height: u8,
+    },
+    /// `FillBgTilemapRect` — the rect's entries become `tile` at
+    /// palette `palette`, no flips.
+    Fill {
+        /// The edited layer (0–3).
+        bg: u8,
+        /// The tile the rect fills with.
+        tile: u16,
+        /// The rect's left edge, in tiles.
+        left: u8,
+        /// The rect's top edge, in tiles.
+        top: u8,
+        /// The rect's width, in tiles.
+        width: u8,
+        /// The rect's height, in tiles.
+        height: u8,
+        /// The palette bank of the filled entries.
+        palette: u8,
+    },
 }
 
 /// One engine's master-brightness unit — `MASTER_BRIGHT`
@@ -234,8 +513,9 @@ pub enum BrightnessMode {
 }
 
 /// One 2D engine's state — four text BG layers over the blend and
-/// brightness units, plus the named char-block slots.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// brightness units, the named char-block slots, the composed BG
+/// palette RAM, and the message windows printing into the layers.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct EngineFrame {
     /// The engine's four BG layers, BG0 through BG3. Engine A's BG0
     /// doubles as the 3D core's framebuffer when bound to a model
@@ -243,13 +523,25 @@ pub struct EngineFrame {
     /// which a disabled layer already expresses.
     pub bgs: [BgLayer; 4],
     /// The char-block slots (indices 0–7) that `char_base` names —
-    /// each an optional tile-set asset. Layers share a slot by naming
-    /// the same index.
-    pub char_blocks: [Option<AssetId>; 8],
+    /// each a list of [`TilePlacement`]s at their tile offsets.
+    /// Layers share a slot by naming the same index.
+    pub char_blocks: [Vec<TilePlacement>; 8],
     /// The engine's alpha-blend unit.
     pub blend: Blend,
     /// The engine's master-brightness unit.
     pub brightness: MasterBrightness,
+    /// The engine's BG palette RAM as composed at raster time: 256
+    /// colors built from [`PaletteLoad`]s in order — the one palette
+    /// every 4bpp bank and 8bpp pixel of this engine decodes against,
+    /// exactly the hardware's single RAM.
+    pub palette_loads: Vec<PaletteLoad>,
+    /// The message windows on this engine's layers.
+    pub windows: Vec<Window>,
+    /// The tilemap-buffer rewrites made since the layers' screen
+    /// assets loaded, applied after them at raster time in push order
+    /// (a later edit wins). A screen load or tilemap clear for a layer
+    /// drops that layer's earlier edits — the scene owns the lifetime.
+    pub tilemap_edits: Vec<TilemapEdit>,
     /// The backdrop ("mask") color — raw BGR555 (`GX_RGB` layout:
     /// r bits 0–4, g 5–9, b 10–14); the color shown wherever no layer
     /// covers the pixel.
@@ -262,7 +554,7 @@ pub struct EngineFrame {
 /// [`LogicalFrame::display`] says which LCD each drives. The frame
 /// after a tick is what the rasterizer turns into pixels and what
 /// frame-indexed tests (and, later, the harness) compare.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LogicalFrame {
     /// Engine A (MAIN, register base `0x04000000`).
     pub main: EngineFrame,
@@ -287,7 +579,9 @@ mod tests {
             assert_eq!(engine.blend, Blend::default());
             assert_eq!(engine.brightness, MasterBrightness::default());
             assert!(engine.bgs.iter().all(|bg| !bg.enabled));
-            assert!(engine.char_blocks.iter().all(|block| block.is_none()));
+            assert!(engine.char_blocks.iter().all(|block| block.is_empty()));
+            assert!(engine.palette_loads.is_empty());
+            assert!(engine.windows.is_empty());
         }
     }
 
@@ -318,9 +612,12 @@ mod tests {
     #[test]
     fn layers_sharing_a_char_base_share_the_slot() {
         // The copyright beat's SUB BG0 and BG1 read the same tiles:
-        // same char_base, one slot, two screen references.
+        // same char_base, one placement, two screen references.
         let mut sub = EngineFrame::default();
-        sub.char_blocks[4] = Some(AssetId::FIRST);
+        sub.char_blocks[4].push(TilePlacement {
+            asset: AssetId::FIRST,
+            tile: 0,
+        });
         sub.bgs[0].char_base = 4;
         sub.bgs[0].screen = Some(AssetId::FIRST.next());
         sub.bgs[1].char_base = 4;
@@ -328,7 +625,88 @@ mod tests {
         assert_eq!(sub.bgs[0].char_base, sub.bgs[1].char_base);
         assert_eq!(
             sub.char_blocks[4],
-            sub.char_blocks[sub.bgs[1].char_base as usize]
+            sub.char_blocks[usize::from(sub.bgs[1].char_base)]
+        );
+    }
+
+    #[test]
+    fn tile_placements_cover_offsets_within_one_block() {
+        // The Oak speech's MAIN BG0: intro art at tile 0, a frame at
+        // 0x3D9, another at 0x3E2 — one block, three placements, each
+        // tile index resolving to the placement that covers it.
+        let mut engine = EngineFrame::default();
+        for (asset, tile) in [(AssetId::FIRST, 0u16), (AssetId::FIRST.next(), 0x3D9)] {
+            engine.char_blocks[6].push(TilePlacement { asset, tile });
+        }
+        assert_eq!(engine.char_blocks[6][0].tile, 0);
+        assert_eq!(engine.char_blocks[6][1].tile, 0x3D9);
+    }
+
+    #[test]
+    fn windows_are_full_printing_state() {
+        // A dialog window mid-print: filled, two glyphs down, framed,
+        // waiting with the arrow.
+        let window = Window {
+            bg: 0,
+            left: 2,
+            top: 19,
+            width: 27,
+            height: 4,
+            palette: 12,
+            base_tile: 0x36D,
+            fill: 0xF,
+            glyphs: vec![
+                WindowGlyph {
+                    font: AssetId::FIRST,
+                    glyph: 300,
+                    x: 0,
+                    y: 0,
+                    color: TextColor::new(1, 2, 0xF),
+                    double_rows: false,
+                },
+                WindowGlyph {
+                    font: AssetId::FIRST,
+                    glyph: 301,
+                    x: 8,
+                    y: 0,
+                    color: TextColor::new(1, 2, 0xF),
+                    double_rows: false,
+                },
+            ],
+            scroll: 0,
+            frame: Some(WindowFrame {
+                base_tile: 0x3E2,
+                palette: 4,
+            }),
+            arrow: Some(WindowArrow {
+                base_tile: 0,
+                index: 2,
+            }),
+            focus: Some(WindowFocus {
+                asset: AssetId::FIRST.next().next(),
+                index: 1,
+                scroll: 0,
+            }),
+        };
+        assert_eq!(window.rect_px(), (16, 152, 216, 32));
+        assert_eq!(window.glyphs.len(), 2);
+        assert_eq!(window.glyphs[1].x, 8);
+        // The arrow cycles pret's offsets.
+        assert_eq!(ARROW_TILE_OFFSETS, [0, 1, 2, 1]);
+        // The focus indicator: the naming screen's "Your name?" blit,
+        // frame 1, landed before any scroll.
+        let focus = window.focus.expect("the fixture sets a focus");
+        assert_eq!(focus.index, 1);
+        assert_eq!(focus.scroll, 0);
+        // A later scroll shifts the blit in lockstep — the content row
+        // it occupies grows by the difference.
+        let scrolled = WindowFocus {
+            scroll: 16,
+            ..focus
+        };
+        assert_eq!(
+            scrolled.scroll - focus.scroll, 16,
+            "the scroll delta is the blit's shift"
         );
     }
 

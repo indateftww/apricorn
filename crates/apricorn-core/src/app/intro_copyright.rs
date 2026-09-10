@@ -43,7 +43,8 @@ use std::sync::Mutex;
 use crate::app::App;
 use crate::assets::{AssetStore, AssetsError, copyright_beat};
 use crate::frame::{
-    BgLayer, Blend, BlendEffect, ColorMode, DisplaySelect, LogicalFrame, ScreenSize, plane,
+    BgLayer, Blend, BlendEffect, ColorMode, DisplaySelect, LogicalFrame, PaletteLoad, ScreenSize,
+    TilePlacement, plane,
 };
 use crate::input::{Input, Keys, key};
 
@@ -127,43 +128,62 @@ impl IntroCopyright {
         // templates). MAIN BG0 owns char slot 1, the sunrise layers
         // share slot 2; SUB BG0/BG1 share slot 1 (the logo cover reads
         // the logo's tiles), SUB BG3 owns slot 4.
-        let main_layer = |char_base: u8, screen, priority: u8| BgLayer {
+        let layer = |char_base: u8, screen, priority: u8| BgLayer {
             enabled: false,
             char_base,
             screen,
-            palette: Some(main_palette),
             color_mode: ColorMode::Bpp4,
             size: ScreenSize::W256xH256,
             scroll_x: 0,
             scroll_y: 0,
             priority,
         };
-        let sub_layer = |char_base: u8, screen, priority: u8| BgLayer {
-            palette: Some(sub_palette),
-            ..main_layer(char_base, screen, priority)
-        };
 
         let mut frame = LogicalFrame {
             display: DisplaySelect::SubOnTop,
             ..LogicalFrame::default()
         };
-        frame.main.char_blocks[1] = Some(main_bg0_char);
-        frame.main.char_blocks[2] = Some(main_bg3_char);
+        // GXLoadPal's 0x140-byte loads at slot offset 0: the first
+        // 160 colors of each engine's palette RAM.
+        frame.main.palette_loads.push(PaletteLoad {
+            asset: main_palette,
+            offset: 0,
+            colors: 0x140 / 2,
+        });
+        frame.sub.palette_loads.push(PaletteLoad {
+            asset: sub_palette,
+            offset: 0,
+            colors: 0x140 / 2,
+        });
+        frame.main.char_blocks[1].push(TilePlacement {
+            asset: main_bg0_char,
+            tile: 0,
+        });
+        frame.main.char_blocks[2].push(TilePlacement {
+            asset: main_bg3_char,
+            tile: 0,
+        });
         frame.main.bgs = [
-            main_layer(1, Some(main_bg0_screen), 0),
-            main_layer(2, Some(main_bg1_screen), 1),
-            main_layer(2, Some(main_bg2_screen), 2),
-            main_layer(2, Some(main_bg3_screen), 3),
+            layer(1, Some(main_bg0_screen), 0),
+            layer(2, Some(main_bg1_screen), 1),
+            layer(2, Some(main_bg2_screen), 2),
+            layer(2, Some(main_bg3_screen), 3),
         ];
-        frame.sub.char_blocks[1] = Some(sub_bg1_char);
-        frame.sub.char_blocks[4] = Some(sub_bg3_char);
+        frame.sub.char_blocks[1].push(TilePlacement {
+            asset: sub_bg1_char,
+            tile: 0,
+        });
+        frame.sub.char_blocks[4].push(TilePlacement {
+            asset: sub_bg3_char,
+            tile: 0,
+        });
         frame.sub.bgs = [
-            sub_layer(1, Some(sub_bg0_screen), 0),
-            sub_layer(1, Some(sub_bg1_screen), 1),
+            layer(1, Some(sub_bg0_screen), 0),
+            layer(1, Some(sub_bg1_screen), 1),
             // SUB BG2's template names slot 3, but nothing ever loads
             // there and no screen arrives — the cleared tilemap.
-            sub_layer(3, None, 2),
-            sub_layer(4, Some(sub_bg3_screen), 3),
+            layer(3, None, 2),
+            layer(4, Some(sub_bg3_screen), 3),
         ];
 
         Ok(Self {
@@ -237,6 +257,7 @@ impl App for IntroCopyright {
                         plane2: plane::BD,
                         eva: 31,
                         ebv: 0,
+                        evy: 0,
                     };
                     self.step = Step::WaitGamefreak;
                     advanced = true;
@@ -265,6 +286,7 @@ impl App for IntroCopyright {
                 plane2: plane::BD,
                 eva: 31 - ev,
                 ebv: ev,
+                evy: 0,
             };
             self.frame.main.blend = fade;
             self.frame.sub.blend = fade;

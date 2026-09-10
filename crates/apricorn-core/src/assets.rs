@@ -27,7 +27,8 @@ use std::fmt;
 use std::path::Path;
 
 use crate::cache;
-use crate::formats::{Narc, Ncgr, Nclr, Nscr};
+use crate::font::Font;
+use crate::formats::{MsgBank, Narc, Ncgr, Nclr, Nscr};
 use crate::frame::AssetId;
 use crate::nds::{NdsError, NdsRom, lz10};
 
@@ -114,6 +115,173 @@ pub mod title_screen {
     pub const PAL_LOAD_BYTES: usize = 0x200;
 }
 
+/// The font archive — pret `src/font.c`'s `sFontArcParam` over
+/// `NARC_graphic_font`. Members 0–4 are fonts 0–4, member 0xA is
+/// font 5; every HGSS font is variable-width (the FALSE column).
+pub mod font_narc {
+    /// The archive in NitroFS (`a/0/1/6`).
+    pub const NARC: &str = "a/0/1/6";
+    /// Font 0 — the button/menu font (main menu, Oak full-screen text).
+    pub const FONT0: usize = 0;
+    /// Font 1 — the dialog font (message windows).
+    pub const FONT1: usize = 1;
+    /// Font 2 — the naming screen's entry font.
+    pub const FONT2: usize = 2;
+    /// Font 3.
+    pub const FONT3: usize = 3;
+    /// Font 4 — the Oak speech's multichoice-button font.
+    pub const FONT4: usize = 4;
+    /// Font 5 — the PBR menu font.
+    pub const FONT5: usize = 0xA;
+    /// The {YESNO} focus-indicator NCGR — pret `text.c`
+    /// `LoadScreenFocusIndicatorGraphics`
+    /// (`GfGfxLoader_GetCharData(NARC_graphic_font, 6)`): 48 4bpp
+    /// tiles, four 384-byte frames of twelve.
+    pub const FOCUS_INDICATOR: usize = 6;
+    /// `LoadFontPal0`'s palette: member 7, 0x20 bytes (16 colors).
+    pub const PAL0: usize = 7;
+    /// `LoadFontPal1`'s palette: member 8, 0x20 bytes.
+    pub const PAL1: usize = 8;
+    /// The palette load size (`LoadFontPal0/1`): 16 colors.
+    pub const PAL_LOAD_BYTES: usize = 0x20;
+}
+
+/// The message banks the boot-to-new-game flow reads — all members
+/// of `NARC_msgdata_msg` (`a/0/2/7`), one [`crate::cache::Text`] per
+/// bank, each id pinned by the flow's pret source:
+///
+/// | Bank | pret source |
+/// |---|---|
+/// | 17 | `ov74` main-menu new-game warning (`src/application/main_menu/main_menu.c`) |
+/// | 442 | `ov74` main-menu buttons (`src/application/main_menu/main_menu.c`) |
+/// | 197 | naming-screen battle message (`src/naming_screen.c`) |
+/// | 219 | Oak speech (`src/oaks_speech.c`) |
+/// | 229 | save-corruption warnings (`src/check_savedata.c`) |
+/// | 249 | naming-screen UI (`src/naming_screen.c`) |
+/// | 254 | naming-screen default names (`src/naming_screen.c`) |
+pub mod msg_narc {
+    /// The archive in NitroFS (`a/0/2/7`).
+    pub const NARC: &str = "a/0/2/7";
+}
+
+/// The user-frame graphics — pret `asm/render_window.s`
+/// `LoadUserFrameGfx1/2`. Gfx1 picks NCGR member 0 for frame id 0,
+/// member 1 for any other, NCLR member 0x19 (member 0x2E for frame
+/// id 2); Gfx2 decodes through the tiny helpers `sub_0200E63C`
+/// (`:364`, member = frame + 2) and `sub_0200E640` (`:370`, member
+/// = frame + 0x1A), so frame id 0's NCGR is member 2 and its NCLR
+/// member 0x1A. Both load 0x20 bytes of palette into the caller's
+/// bank.
+pub mod frame_narc {
+    /// The archive in NitroFS (`a/0/3/8`).
+    pub const NARC: &str = "a/0/3/8";
+    /// The default frame's tiles (`LoadUserFrameGfx1`, frame id 0).
+    pub const FRAME0_CHAR: usize = 0;
+    /// Any other frame's tiles (`LoadUserFrameGfx1`).
+    pub const FRAME1_CHAR: usize = 1;
+    /// Frame id 0's tiles through `LoadUserFrameGfx2` — member
+    /// frame + 2 (`sub_0200E63C`).
+    pub const GFX2_FRAME0_CHAR: usize = 2;
+    /// The frames' 16-color palette (`LoadUserFrameGfx1`, frame
+    /// id 2 uses member 0x2E).
+    pub const PALETTE: usize = 0x19;
+    /// Frame id 2's palette (`LoadUserFrameGfx1`).
+    pub const PALETTE2: usize = 0x2E;
+    /// Frame id 0's palette through `LoadUserFrameGfx2` — member
+    /// frame + 0x1A (`sub_0200E640`).
+    pub const GFX2_FRAME0_PALETTE: usize = 0x1A;
+}
+
+/// The Oak-speech intro graphics — pret `src/oaks_speech.c`, members
+/// of `NARC_demo_intro_intro` (`a/1/2/0`).
+///
+/// The SoulSilver siblings (`LoadButtonTutorialGfx`'s version branch:
+/// MAIN NCLR 2, SUB NCLR 31) are not loaded — this port pins
+/// HeartGold, as every scene before it does.
+pub mod intro_narc {
+    /// The archive in NitroFS (`a/1/2/0`).
+    pub const NARC: &str = "a/1/2/0";
+
+    /// MAIN BG3's char: the button-tutorial NCGR
+    /// (`LoadButtonTutorialGfx`, `oaks_speech.c:1162`).
+    pub const BUTTON_TUTORIAL_MAIN_CHAR: usize = 0;
+    /// SUB BG3's char (`oaks_speech.c:1164`).
+    pub const BUTTON_TUTORIAL_SUB_CHAR: usize = 32;
+    /// MAIN BG palette: HG branch, `@MAIN 0` size `0x60` — 48 colors
+    /// (`oaks_speech.c:1166`, `:1172`).
+    pub const MAIN_PALETTE: usize = 1;
+    /// SUB BG palette: HG branch, `@SUB 0` size `0xA0` — 80 colors
+    /// (`oaks_speech.c:1167`, `:1173`).
+    pub const SUB_PALETTE: usize = 30;
+    /// The button-tutorial screen layouts `sButtonTutorialNSCR`
+    /// (`oaks_speech.c:309-316`), MAIN BG3 — six of them; the scene's
+    /// `SetButtonTutorialScreenLayout` picks by index.
+    pub const BUTTON_TUTORIAL_SCREENS: [usize; 6] = [3, 4, 5, 6, 7, 8];
+    /// The Oak-pic screen (`DrawPicOnBgLayer`'s screen member 9,
+    /// `oaks_speech.c:1210`), MAIN BG1/BG2.
+    pub const PIC_SCREEN: usize = 9;
+
+    /// Oak's char (`sBgPicNCGR_NCLR` row 1, `oaks_speech.c:496-503`).
+    pub const OAK_CHAR: usize = 10;
+    /// Oak's palette.
+    pub const OAK_PALETTE: usize = 11;
+    /// Ethan's chars, rows 2–5 (`oaks_speech.c:505-523`).
+    pub const ETHAN_CHARS: [usize; 4] = [12, 13, 14, 15];
+    /// Ethan's palette.
+    pub const ETHAN_PALETTE: usize = 16;
+    /// Lyra's chars, rows 6–9 (`oaks_speech.c:525-543`).
+    pub const LYRA_CHARS: [usize; 4] = [17, 18, 19, 20];
+    /// Lyra's palette.
+    pub const LYRA_PALETTE: usize = 21;
+
+    /// The shrink anim's post-pic frames, male
+    /// (`sPlayerPicShrinkGfx_Male`, `oaks_speech.c:333-340` — index 0
+    /// is member 12, Ethan 1, already on screen from `DrawPic`).
+    pub const SHRINK_MALE_CHARS: [usize; 4] = [22, 23, 24, 25];
+    /// The shrink anim's post-pic frames, female
+    /// (`sPlayerPicShrinkGfx_Female`, `oaks_speech.c:342-349` —
+    /// index 0 is member 17, Lyra 1).
+    pub const SHRINK_FEMALE_CHARS: [usize; 4] = [26, 27, 28, 29];
+
+    /// SUB BG3's screens `ov53_021E8558` (`oaks_speech.c:301-307`),
+    /// indexed by the layout id `ov53_021E67C4`'s callers pass:
+    /// 0→44, 1→43, 2→43, 3→45, 4→51.
+    pub const SUB3_SCREENS: [usize; 5] = [44, 43, 43, 45, 51];
+    /// SUB BG2's char (member 37 — `ov53_021E8584`'s every row,
+    /// `oaks_speech.c:318-331`, and the multichoice flash's member
+    /// 42 below).
+    pub const SUB2_CHAR: usize = 37;
+    /// SUB BG2's screens `ov53_021E8584` (`ov53_021E6824`'s rows):
+    /// 0→47, 1→48, 2→46.
+    pub const SUB2_SCREENS: [usize; 3] = [47, 48, 46];
+    /// SUB BG2's palette: NCLR member 33 `@SUB 0xE0` size `0x60` —
+    /// bank 7 (`ov53_021E6824`, `oaks_speech.c`).
+    pub const SUB2_PALETTE: usize = 33;
+    /// The multichoice cursor-flash char (`InitMultichoiceMenuWithFrameFlash`,
+    /// SUB BG1 member 42).
+    pub const MULTICHOICE_FLASH_CHAR: usize = 42;
+    /// The multichoice screens `sMultichoiceMenuParam`
+    /// (`oaks_speech.c:477-494`), SUB BG1, by menu id: menu 0 the
+    /// 3-choice tutorial button list, menus 1–2 the 2-choice info
+    /// lists, menu 3 the 2-choice gender-adjacent pair.
+    pub const MULTICHOICE_SCREENS: [usize; 4] = [49, 50, 50, 52];
+}
+
+/// The Oak-speech yes/no menu's graphics — pret
+/// `src/oaks_speech_yesnomenu.c:55-68`, members of `NARC_a_2_3_7`
+/// (`a/2/3/7`): palette 0 (`@SUB 32*palette`, 16 colors), char 1,
+/// screen 10.
+pub mod yesno_narc {
+    /// The archive in NitroFS (`a/2/3/7`).
+    pub const NARC: &str = "a/2/3/7";
+    /// The menu's 16-color palette.
+    pub const PALETTE: usize = 0;
+    /// The menu's char (SUB BG2).
+    pub const CHAR: usize = 1;
+    /// The menu's screen (SUB BG2).
+    pub const SCREEN: usize = 10;
+}
+
 /// Failures while opening the dump or loading an asset.
 #[derive(Debug)]
 pub enum AssetsError {
@@ -173,6 +341,10 @@ enum Asset {
     },
     /// Raw screen map entries (a decoded Screen chunk).
     Screen(cache::Screen),
+    /// A decoded font (glyph levels + width table).
+    Font(Font),
+    /// A decoded message bank (a Text chunk).
+    Text(cache::Text),
 }
 
 /// The boot scenes' asset source: a parsed retail dump plus the assets
@@ -257,6 +429,62 @@ impl AssetStore {
         Ok(self.push(Asset::Screen(screen)))
     }
 
+    /// Loads NARC member `member` of the NitroFS archive at `narc_path`
+    /// as a font — the raw `FontHeader` format `font::Font` decodes
+    /// (fonts are not Nitro containers, so there is no cache-chunk
+    /// step: this parse *is* the conversion).
+    ///
+    /// # Errors
+    /// Returns an [`AssetsError`] when the path or member is missing or
+    /// the member does not parse as a font.
+    pub fn load_font(&mut self, narc_path: &str, member: usize) -> Result<AssetId, AssetsError> {
+        let bytes = self.member(narc_path, member)?;
+        let font = Font::parse(&bytes).map_err(|source| AssetsError::Corrupt {
+            what: format!("{narc_path}#{member}"),
+            source,
+        })?;
+        Ok(self.push(Asset::Font(font)))
+    }
+
+    /// Loads NARC member `member` of the NitroFS archive at `narc_path`
+    /// as a message bank — a MAT bank through the converter's exact
+    /// encode/parse path into a Text chunk.
+    ///
+    /// # Errors
+    /// Returns an [`AssetsError`] when the path or member is missing or
+    /// the member is not a parseable MAT bank.
+    pub fn load_msg_bank(&mut self, narc_path: &str, member: usize) -> Result<AssetId, AssetsError> {
+        let bytes = self.member(narc_path, member)?;
+        let bank = MsgBank::parse(&bytes).map_err(|source| AssetsError::Corrupt {
+            what: format!("{narc_path}#{member}"),
+            source,
+        })?;
+        let chunk = cache::encode_text(&bank);
+        let text = cache::Text::parse(&chunk).map_err(|source| AssetsError::Corrupt {
+            what: format!("{narc_path}#{member} (chunk)"),
+            source,
+        })?;
+        Ok(self.push(Asset::Text(text)))
+    }
+
+    /// The font behind `id`, if it names a Font asset.
+    #[must_use]
+    pub fn font(&self, id: AssetId) -> Option<&Font> {
+        match self.assets.get(id.index()) {
+            Some(Asset::Font(font)) => Some(font),
+            _ => None,
+        }
+    }
+
+    /// The message bank behind `id`, if it names a Text asset.
+    #[must_use]
+    pub fn msg_bank(&self, id: AssetId) -> Option<&cache::Text> {
+        match self.assets.get(id.index()) {
+            Some(Asset::Text(text)) => Some(text),
+            _ => None,
+        }
+    }
+
     /// The tile data behind `id`, if it names a Tiles asset.
     #[must_use]
     pub fn tiles(&self, id: AssetId) -> Option<&cache::Tiles> {
@@ -313,9 +541,19 @@ impl AssetStore {
     /// The bytes of NARC `narc_path`'s member `member`, LZ77-10-expanded
     /// when the member is compressed.
     ///
+    /// The NitroFS carries no compression flag — the game knows per
+    /// request (`isCompressed=TRUE`, pret's `FSLoadMemberByPath` calls) —
+    /// so the store sniffs, and the sniff is only the `0x10` magic byte
+    /// (see [`lz10::is_lz10`]). A sniff hit whose expansion fails, or
+    /// expands to nothing, is a false positive rather than a corruption:
+    /// every font member starts with `FontHeader.headerSize = 0x10`
+    /// (`font_data.c`'s `FontData_Init` reads the header raw from the
+    /// member image), which reads as a stream declaring a zero-byte image
+    /// — a decomposition that *succeeds*, empty. No stored member is an
+    /// empty file, so both verdicts hand back the raw bytes.
+    ///
     /// # Errors
-    /// Returns an [`AssetsError`] when the path or member is missing or
-    /// a compressed member does not decompress.
+    /// Returns an [`AssetsError`] when the path or member is missing.
     fn member(&self, narc_path: &str, member: usize) -> Result<Cow<'_, [u8]>, AssetsError> {
         let rom = NdsRom::parse(&self.rom).map_err(|source| AssetsError::Corrupt {
             what: "ROM".to_owned(),
@@ -332,12 +570,10 @@ impl AssetStore {
             .file(member)
             .map_err(|_| AssetsError::Missing(format!("{narc_path} has no member {member}")))?;
         if lz10::is_lz10(raw) {
-            Ok(Cow::Owned(lz10::decompress(raw).map_err(|source| {
-                AssetsError::Corrupt {
-                    what: format!("{narc_path}#{member}"),
-                    source,
-                }
-            })?))
+            match lz10::decompress(raw) {
+                Ok(image) if !image.is_empty() => Ok(Cow::Owned(image)),
+                _ => Ok(Cow::Borrowed(raw)),
+            }
         } else {
             Ok(Cow::Borrowed(raw))
         }

@@ -192,6 +192,36 @@ pins the same pixels by SHA-1 (details: `docs/gfx.md`).
       blobs plus a retail `hg.sav` gate (`tests/save.rs`),
       `docs/save.md`
 - [ ] Game-state machine: boot → title → new game → Oak intro → name entry.
+      One commit at the end; the port order, one scene at a time:
+      - [x] Pinned RTC clock (`GF_InitRTCWork` — the deterministic
+            time Oak's greeting and `InitializeMainRNG` read).
+            → `apricorn-core::rtc`
+      - [x] The state machine itself: the main-overlay chain
+            (`NitroMain`'s `RegisterMainOverlay` hand-offs), the ov36
+            re-seed points, the card-parse routing onto the status
+            flags. → `apricorn-core::app::game`
+      - [x] Font asset + message-window text rendering in the frame
+            model (TextPrinter: per-frame speeds, wait states, down
+            arrows, `{YESNO 0}` focus blocks) and the palette-fade
+            manager (the master-brightness fades the scenes run).
+            → `apricorn-core::font`, `apricorn-core::app::text`,
+            `apricorn-core::app::fade`
+      - [x] Save-check scene: the status-flag warnings ("corrupted",
+            "erased") and the fade to the menu.
+            → `apricorn-core::app::check_save`
+      - [x] Main menu scene: the save-aware button list, key/touch
+            input, the screen scroll, and the new-game confirmation
+            dialog. → `apricorn-core::app::main_menu`
+      - [x] Oak intro speech (`src/oaks_speech.c`): the info tutorial
+            menu, control/adventure info screens, the time-of-day
+            greeting, the Oak-pic slide, the gender pick, the naming
+            handoff, the shrink anim. → `apricorn-core::app::oak_speech`
+      - [ ] Naming screen (`src/naming_screen.c`): the on-screen
+            keyboard name entry Oak launches (nested overlay).
+            → `apricorn-core::app::naming`
+      - [ ] Landing: desktop presenter wired from `boot_chain` to
+            `Game`, docs page, machine-walk tests re-pinned through
+            Oak/naming, this checkbox pass, the step's single commit.
 
 **Exit:** new-game flow up to landing in the player's bedroom; original `.sav`
 files load and save back byte-identically.

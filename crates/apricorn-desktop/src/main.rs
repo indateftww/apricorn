@@ -2,19 +2,23 @@
 //!
 //! The topology: this crate is the window (winit) + present (wgpu)
 //! shell around the headless core. Every tick runs
-//! [`apricorn_core::app`]'s boot chain (the copyright beat, then the
-//! title screen, cycling) and every present rasterizes the chain's
-//! logical frame with [`apricorn_gfx::render`] and uploads it — the
-//! same pipeline the dump CLI and the golden-hash tests pin, so the
-//! window shows exactly what the hashes certify. Nothing here can
-//! change engine behavior: the wall clock only paces
-//! ([`runner::Pacer`], 59.8268 Hz), never feeds state.
+//! [`apricorn_core::app::game::Game`]'s machine — the boot chain the
+//! title's timeout cycles, the save-check menu, and the new-game
+//! walk into Oak's speech (the naming screen past it is the next
+//! step, so the speech ends by stalling at the name overlay) — and
+//! every present rasterizes the machine's logical frame with
+//! [`apricorn_gfx::render`] and uploads it — the same pipeline the
+//! dump CLI and the golden-hash tests pin, so the window shows
+//! exactly what the hashes certify. Nothing here can change engine
+//! behavior: the wall clock only paces ([`runner::Pacer`], 59.8268
+//! Hz), never feeds state, and the machine runs on the tests' frozen
+//! clock (a real-RTC read is future work).
 //!
 //! Input maps the keyboard onto the `REG_KEYXY` bits (the layout the
 //! engine consumes): A/B/X/Y on their same-letter keys, the arrows as
 //! the D-pad, Enter as START, Shift as SELECT, and L/R on their
 //! same-letter keys. Touch input is deferred with the touch model —
-//! the Phase 3 beats skip on START/A anyway. Escape closes the window.
+//! every scene so far takes its pad path. Escape closes the window.
 //!
 //! Usage: `cargo run -p apricorn-desktop [--rom <path>]` — the ROM
 //! defaults to `hg_usa.nds` in the working directory (repo root).
@@ -27,10 +31,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use apricorn_core::Frame;
-use apricorn_core::app::boot_chain;
+use apricorn_core::app::game::Game;
 use apricorn_core::assets::AssetStore;
 use apricorn_core::frame::{DisplaySelect, LogicalFrame};
 use apricorn_core::input::{Input, Keys, key};
+use apricorn_core::rtc::RtcDateTime;
 use presenter::Presenter;
 use runner::Pacer;
 use winit::application::ApplicationHandler;
@@ -38,6 +43,13 @@ use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
+
+/// The frozen clock the pinned tests run — HG's US release date at
+/// noon, so the window plays exactly the walk `apps_hg` certifies
+/// (the noon greeting, the same seeds).
+fn frozen_rtc() -> RtcDateTime {
+    RtcDateTime::new(2010, 3, 14, 0, 12, 0, 0)
+}
 
 /// The keyboard → `REG_KEYXY` mapping. Physical-key based (position,
 /// not glyph) so it survives any layout the OS applies.
@@ -60,31 +72,34 @@ fn key_bit(code: KeyCode) -> Option<u16> {
     Some(bit)
 }
 
-/// The shell's whole state: the chain it ticks, the input it feeds,
+/// The shell's whole state: the machine it ticks, the input it feeds,
 /// the window/presenter it draws through, and the pacer that decides
 /// when to do each.
 struct Shell {
     store: Arc<Mutex<AssetStore>>,
-    chain: apricorn_core::app::BootChain,
+    game: Game,
     /// The `REG_KEYXY` bits currently held (bit set = held).
     keys: u16,
     window: Option<std::sync::Arc<Window>>,
     presenter: Option<Presenter>,
     /// The next tick's global frame index.
     frame_index: u32,
-    /// The last logical frame the chain produced (its cleared state
-    /// before the first tick — the chain is valid to draw at t=0).
+    /// The last logical frame the machine produced (its cleared state
+    /// before the first tick — the machine is valid to draw at t=0).
     last_frame: LogicalFrame,
     pacer: Pacer,
 }
 
 impl Shell {
     fn new(store: Arc<Mutex<AssetStore>>) -> Self {
-        let chain = boot_chain(Arc::clone(&store));
-        let last_frame = *chain.app().frame();
+        // A blank card: the no-save path straight through the menu's
+        // NEW GAME into Oak's speech.
+        let game = Game::new(Arc::clone(&store), None, frozen_rtc())
+            .expect("a blank card boots a new game");
+        let last_frame = game.frame().clone();
         Self {
             store,
-            chain,
+            game,
             keys: 0,
             window: None,
             presenter: None,
@@ -94,7 +109,7 @@ impl Shell {
         }
     }
 
-    /// Advances the chain `ticks` times with the current input,
+    /// Advances the machine `ticks` times with the current input,
     /// remembering the last frame produced.
     fn tick(&mut self, ticks: u32) {
         if ticks == 0 {
@@ -105,13 +120,8 @@ impl Shell {
             touch: None,
         };
         for _ in 0..ticks {
-            let frame = self.chain.tick(
-                Frame {
-                    index: self.frame_index,
-                },
-                input,
-            );
-            self.last_frame = *frame;
+            let frame = self.game.tick(Frame { index: self.frame_index }, input);
+            self.last_frame = frame.clone();
             self.frame_index += 1;
         }
         if let Some(window) = &self.window {

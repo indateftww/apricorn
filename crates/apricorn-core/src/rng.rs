@@ -11,6 +11,8 @@
 //! | `LCRandRange` (static inline) | [`Lcrng::rand_range`] | draw `% maximum`, `0` for `maximum <= 1` |
 //! | `PRandom` | [`prandom`] | stateless: `seed * 1812433253 + 1` |
 //! | `MonEncryptionLCRNG` | a local [`Lcrng`] | the same recurrence over a caller-owned seed |
+//! | `sMTRNG_State`/`sMTRNG_Cycles` + `SetMTRNGSeed` | [`Mt19937::uninitialized`]/[`Mt19937::new`]/[`Mt19937::set_seed`] | the boot-seeded generator |
+//! | `MTRandom` | [`Mt19937::next_u32`] | advance the cursor, temper the word |
 //!
 //! The recurrence is the classic Pokémon LCG —
 //! `state = state * 1103515245 + 24691`, draw = the top 16 bits
@@ -28,10 +30,11 @@
 //! draw. `LCRandRange` is a `static inline` in the C (no pinned body
 //! exists); its modulo is plain arithmetic, pinned by unit tests
 //! over the differential-tested draw. The Mersenne Twister
-//! (`SetMTRNGSeed`/`MTRandom`) stays in the harness until an engine
-//! consumer needs it, and the boot-time RTC seeding belongs to the
-//! game-state machine (Phase 4, step 5) — this module is the
-//! deterministic core both of those will call.
+//! (`SetMTRNGSeed`/`MTRandom`) is locked the same way by
+//! `tests/arm_hg.rs`, which uses this module's [`Mt19937`] as its
+//! reference; the boot-time RTC seeding belongs to the game-state
+//! machine (Phase 4, step 5, `crate::app::game`) — this module is
+//! the deterministic core it calls.
 
 /// The LCG multiplier — pret `LCRandom`, the word `0x41C64E6D` whose
 /// literal pool located the math_util pins.
@@ -121,6 +124,126 @@ pub fn prandom(seed: u32) -> u32 {
     seed.wrapping_mul(1_812_433_253).wrapping_add(1)
 }
 
+/// The Mersenne Twister — pret's `SetMTRNGSeed`/`MTRandom` over the
+/// statics `sMTRNG_State`/`sMTRNG_Cycles` (`src/math_util.c`), the
+/// standard MT19937 recurrence in the SDK's exact shape.
+///
+/// Two details the usual MT19937 write-up hides, both ported:
+///
+/// * `SetMTRNGSeed`'s loop leaves the cursor at 624 (its exit
+///   value), so the first draw after seeding twists immediately;
+/// * a fresh image boots with the cursor at 625 — a sentinel that
+///   makes the first draw re-seed with 5489 *before* twisting.
+///   [`Mt19937::uninitialized`] is that boot state; the data pin for
+///   the 625 came straight out of the retail image.
+///
+/// The game seeds it at every `InitializeMainRNG` (boot, and again at
+/// each `ov36` overlay init — `src/main.c`, `src/overlay_36.c`);
+/// its first engine consumer that *draws* is the post-Oak game-state
+/// init (trainer ID and friends), which arrives with the structured
+/// save blocks.
+///
+/// ```
+/// use apricorn_core::rng::Mt19937;
+///
+/// // Seeding two generators alike gives like streams…
+/// let mut a = Mt19937::new(0x1234);
+/// let mut b = Mt19937::new(0x1234);
+/// assert_eq!(a.next_u32(), b.next_u32());
+///
+/// // …and the boot image's sentinel reseeds with 5489 on its first
+/// // draw, so it matches a generator seeded with 5489.
+/// let mut boot = Mt19937::uninitialized();
+/// let mut seeded = Mt19937::new(5489);
+/// assert_eq!(boot.next_u32(), seeded.next_u32());
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mt19937 {
+    /// `sMTRNG_State` — the 624-word twisted array.
+    state: [u32; 624],
+    /// `sMTRNG_Cycles` — the draw cursor; 624 means "twist first",
+    /// 625 the fresh-image sentinel (re-seed 5489 first).
+    cycles: i32,
+}
+
+impl Mt19937 {
+    /// The boot image's state: zeroed words with the 625 sentinel
+    /// cursor (`sMTRNG_Cycles`'s initializer in the retail image) —
+    /// the first [`draw`](Self::next_u32) re-seeds with 5489, exactly
+    /// as a fresh-booted game that never ran `InitializeMainRNG`.
+    #[must_use]
+    pub fn uninitialized() -> Self {
+        Self {
+            state: [0; 624],
+            cycles: 625,
+        }
+    }
+
+    /// A generator over `seed` — `SetMTRNGSeed` on a fresh machine.
+    #[must_use]
+    pub fn new(seed: u32) -> Self {
+        let mut mt = Self::uninitialized();
+        mt.set_seed(seed);
+        mt
+    }
+
+    /// `SetMTRNGSeed`: the standard init `state[i] = 1812433253 *
+    /// (state[i-1] ^ (state[i-1] >> 30)) + i`, with the cursor left
+    /// at the loop's exit value 624 (the first draw twists first).
+    pub fn set_seed(&mut self, seed: u32) {
+        self.state[0] = seed;
+        for i in 1..624 {
+            let prev = self.state[i - 1];
+            self.state[i] = 1_812_433_253u32
+                .wrapping_mul(prev ^ (prev >> 30))
+                .wrapping_add(i as u32);
+        }
+        self.cycles = 624;
+    }
+
+    /// `MTRandom`: serve the tempered word under the cursor, twisting
+    /// (and, on the fresh-image sentinel, re-seeding with 5489) when
+    /// the cursor is spent.
+    pub fn next_u32(&mut self) -> u32 {
+        if self.cycles >= 624 {
+            if self.cycles == 625 {
+                self.set_seed(5489);
+            }
+            self.twist();
+        }
+        // The C is `val = sMTRNG_State[sMTRNG_Cycles++]` — "has to be
+        // this way in order to match" — the cursor advances even when
+        // the tempering below were elided.
+        let mut val = self.state[self.cycles as usize];
+        self.cycles += 1;
+        val ^= val >> 11;
+        val ^= (val << 7) & 0x9D2C_5680;
+        val ^= (val << 15) & 0xEFC6_0000;
+        val ^= val >> 18;
+        val
+    }
+
+    /// The twist inlined at the top of pret's `MTRandom`, factored
+    /// here: the recurrence over the 624 words, `sMTRNG_XOR` = the
+    /// two-entry `[0, 0x9908_B0DF]` table.
+    fn twist(&mut self) {
+        let xor = [0u32, 0x9908_B0DF];
+        let val =
+            |state: &[u32; 624], i: usize| (state[i] & 0x8000_0000) | (state[i + 1] & 0x7FFF_FFFF);
+        for i in 0..227 {
+            let v = val(&self.state, i);
+            self.state[i] = self.state[i + 397] ^ (v >> 1) ^ xor[(v & 1) as usize];
+        }
+        for i in 227..623 {
+            let v = val(&self.state, i);
+            self.state[i] = self.state[i - 227] ^ (v >> 1) ^ xor[(v & 1) as usize];
+        }
+        let v = (self.state[623] & 0x8000_0000) | (self.state[0] & 0x7FFF_FFFF);
+        self.state[623] = self.state[396] ^ (v >> 1) ^ xor[(v & 1) as usize];
+        self.cycles = 0;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,5 +324,66 @@ mod tests {
         assert_eq!(prandom(0x1234), 0x7931_0285);
         assert_eq!(prandom(0), 1);
         assert_eq!(prandom(0xFFFF_FFFF), 0x93F8_769C);
+    }
+
+    // ===== Mersenne Twister ===========================================
+
+    #[test]
+    fn mt_sentinel_reseeds_with_5489_on_the_first_draw() {
+        // pret's MTRandom: `if (sMTRNG_Cycles >= 624) { if (==
+        // 625) SetMTRNGSeed(5489); twist; }` — the boot image's cursor
+        // is 625, so the unseeded stream is exactly seed 5489's.
+        let mut boot = Mt19937::uninitialized();
+        let mut seeded = Mt19937::new(5489);
+        for i in 0..1300 {
+            // Two twists' worth, as the harness differential does.
+            assert_eq!(boot.next_u32(), seeded.next_u32(), "draw {i}");
+        }
+    }
+
+    #[test]
+    fn mt_seed_leaves_the_cursor_spent_so_the_first_draw_twists() {
+        // SetMTRNGSeed's loop exits with the cursor at 624, so a
+        // seeded machine's first draw comes from a fresh twist — the
+        // second word of a `new(seed)` stream is the cursor's *next*
+        // word, not another twist's first.
+        let mut a = Mt19937::new(0x1234);
+        let mut b = Mt19937::new(0x1234);
+        let first = a.next_u32();
+        let second = a.next_u32();
+        assert_eq!(b.next_u32(), first);
+        assert_eq!(b.next_u32(), second);
+        assert_ne!(first, second, "the tempered words differ");
+    }
+
+    #[test]
+    fn mt_set_seed_restarts_the_stream_mid_stream() {
+        // A reseed mid-stream takes effect on the next draw, exactly
+        // like calling SetMTRNGSeed between MTRandoms.
+        let mut rng = Mt19937::new(0x1234);
+        rng.next_u32();
+        rng.next_u32();
+        rng.set_seed(0x1234);
+        let mut fresh = Mt19937::new(0x1234);
+        for i in 0..4 {
+            assert_eq!(rng.next_u32(), fresh.next_u32(), "draw {i}");
+        }
+    }
+
+    #[test]
+    fn mt_streams_across_the_twist_boundary() {
+        // 625 draws from one seeding crosses a twist without any
+        // discontinuity: the stream stays a pure function of the seed
+        // and draw index, so two like-seeded machines agree past the
+        // boundary the cursor's wrap could have broken.
+        let mut a = Mt19937::new(0xABCD_1234);
+        let mut b = Mt19937::new(0xABCD_1234);
+        for i in 0..625 {
+            assert_eq!(a.next_u32(), b.next_u32(), "draw {i}");
+        }
+        // And the two cursors really are past 624 — one full twist
+        // plus one — so the boundary was crossed, not skirted:
+        // draws 623, 624, 625 bracket it.
+        assert_eq!(a, b);
     }
 }

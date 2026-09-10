@@ -24,8 +24,11 @@
 //!   on at flash-timer 0 and off at 30, the timer wrapping at 45.
 //! * **The exits** (`TitleScreen_Main`): A, START, or a new stylus
 //!   contact once the flash is enabled exits to the save-check menu
-//!   (Phase 4 — the boot chain's next app); the play timer passing
-//!   2340 exits back to the intro movie, the chain's honest loop.
+//!   (`TITLESCREEN_EXIT_MENU`); the play timer passing 2340 exits
+//!   back to the intro movie (`TITLESCREEN_EXIT_TIMEOUT`). The app
+//!   reports which through [`TitleScreen::exit`] — pret's
+//!   `data->exitMode` — so the game-state machine can route the
+//!   restart chain (menu) versus the boot chain's loop (timeout).
 //!
 //! The frame at construction is the cleared state after
 //! `TitleScreen_Init`: every layer configured, all planes off, black
@@ -45,7 +48,8 @@ use std::sync::Mutex;
 use crate::app::App;
 use crate::assets::{AssetStore, AssetsError, title_screen};
 use crate::frame::{
-    BgLayer, Blend, BlendEffect, ColorMode, DisplaySelect, LogicalFrame, ScreenSize, plane,
+    BgLayer, Blend, BlendEffect, ColorMode, DisplaySelect, LogicalFrame, PaletteLoad, ScreenSize,
+    TilePlacement, plane,
 };
 use crate::input::{Input, Keys, key};
 
@@ -61,6 +65,18 @@ const TITLE_DELAY: u16 = 3;
 const TITLE_FADE_CAP: u8 = 31;
 /// The play timer's timeout, pret's `TITLE_SCREEN_DURATION 2340`.
 const PLAY_DURATION: u32 = 2340;
+
+/// How the title screen finished — pret's
+/// `TitleScreenOverlayData::exitMode` values the state machine
+/// routes on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TitleExit {
+    /// `TITLESCREEN_EXIT_MENU`: a press chose the save-check menu.
+    Menu,
+    /// `TITLESCREEN_EXIT_TIMEOUT`: the play timer expired; back to
+    /// the intro movie.
+    Timeout,
+}
 
 /// The title screen app.
 pub struct TitleScreen {
@@ -86,8 +102,8 @@ pub struct TitleScreen {
     prev_keys: Keys,
     /// Whether the stylus was down on the previous tick.
     prev_touch: bool,
-    /// Whether the screen has finished (a press or the timeout).
-    done: bool,
+    /// The screen's exit, once it has finished (pret's `exitMode`).
+    exit: Option<TitleExit>,
 }
 
 impl TitleScreen {
@@ -125,7 +141,6 @@ impl TitleScreen {
             enabled: false,
             char_base,
             screen: None,
-            palette: Some(main_palette),
             color_mode: ColorMode::Bpp4,
             size: ScreenSize::W256xH256,
             scroll_x: 0,
@@ -136,7 +151,6 @@ impl TitleScreen {
             enabled: false,
             char_base,
             screen,
-            palette: Some(sub_palette),
             color_mode,
             size: ScreenSize::W256xH256,
             scroll_x: 0,
@@ -148,14 +162,35 @@ impl TitleScreen {
             display: DisplaySelect::SubOnTop,
             ..LogicalFrame::default()
         };
+        // GXLoadPal's whole-file loads at slot offset 0: both title
+        // NCLRs are 256-color files.
+        frame.sub.palette_loads.push(PaletteLoad {
+            asset: sub_palette,
+            offset: 0,
+            colors: 0x200 / 2,
+        });
+        frame.main.palette_loads.push(PaletteLoad {
+            asset: main_palette,
+            offset: 0,
+            colors: 0x200 / 2,
+        });
         // G2_SetBG0Priority(1) after the 3D VRAM manager's creation.
         frame.main.bgs[0] = main_layer(0, 1);
         frame.main.bgs[1] = main_layer(1, 1);
         frame.main.bgs[2] = main_layer(4, 3);
         frame.main.bgs[3] = main_layer(0, 0);
-        frame.sub.char_blocks[3] = Some(sub_bg1_char);
-        frame.sub.char_blocks[0] = Some(sub_bg2_char);
-        frame.sub.char_blocks[4] = Some(sub_bg3_char);
+        frame.sub.char_blocks[3].push(TilePlacement {
+            asset: sub_bg1_char,
+            tile: 0,
+        });
+        frame.sub.char_blocks[0].push(TilePlacement {
+            asset: sub_bg2_char,
+            tile: 0,
+        });
+        frame.sub.char_blocks[4].push(TilePlacement {
+            asset: sub_bg3_char,
+            tile: 0,
+        });
         frame.sub.bgs[1] = sub_layer(3, Some(sub_bg1_screen), ColorMode::Bpp4, 0);
         frame.sub.bgs[2] = sub_layer(0, Some(sub_bg2_screen), ColorMode::Bpp8, 0);
         frame.sub.bgs[3] = sub_layer(4, Some(sub_bg3_screen), ColorMode::Bpp8, 3);
@@ -168,6 +203,7 @@ impl TitleScreen {
             plane2: plane::BG0 | plane::BG3 | plane::OBJ | plane::BD,
             eva: 0,
             ebv: 31,
+            evy: 0,
         };
 
         Ok(Self {
@@ -181,7 +217,7 @@ impl TitleScreen {
             fade_timer: 0,
             prev_keys: Keys::IDLE,
             prev_touch: false,
-            done: false,
+            exit: None,
         })
     }
 
@@ -242,16 +278,16 @@ impl App for TitleScreen {
         self.run_flash();
         self.play_timer += 1;
         if new_keys.any(key::A | key::START) || touch_new {
-            // TITLESCREEN_EXIT_MENU: the save-check menu is Phase 4;
-            // the boot chain's next app takes over.
-            self.done = true;
+            // TITLESCREEN_EXIT_MENU: the state machine routes this to
+            // the save-check menu.
+            self.exit = Some(TitleExit::Menu);
             return;
         }
         if self.play_timer > PLAY_DURATION {
             // TITLESCREEN_EXIT_TIMEOUT: the game turns MAIN BG3 off
             // on its way out, back to the intro movie.
             self.frame.main.bgs[3].enabled = false;
-            self.done = true;
+            self.exit = Some(TitleExit::Timeout);
             return;
         }
         // TitleScreenAnim_FadeInGameTitleLayer: a 3-frame delay, then
@@ -270,10 +306,19 @@ impl App for TitleScreen {
     }
 
     fn next(&self) -> crate::app::ChainNext {
-        if self.done {
+        if self.exit.is_some() {
             crate::app::ChainNext::Advance
         } else {
             crate::app::ChainNext::Stay
         }
+    }
+}
+
+impl TitleScreen {
+    /// How the screen finished — pret's `data->exitMode` — once
+    /// [`App::next`](crate::app::App::next) says `Advance`.
+    #[must_use]
+    pub fn exit(&self) -> Option<TitleExit> {
+        self.exit
     }
 }

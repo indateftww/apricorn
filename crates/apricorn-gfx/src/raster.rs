@@ -1,14 +1,27 @@
 //! The rasterizer — one logical frame to two RGBA screens.
 //!
-//! For each engine ([`EngineFrame`]) this walks every output pixel
-//! and composites the enabled text BG layers top-down by
-//! `BGxCNT` priority (ties to the lower BG index, the GBA
-//! convention), over the backdrop color. A layer's pixel comes from
-//! its screen entry at the scrolled position (scroll wraps within
-//! the layer's map size), the 8×8 tile in its char block, and the
-//! layer's placed palette — 4bpp entries pick a 16-color bank,
-//! 8bpp addresses the palette directly, and color 0 is transparent
-//! (`docs/nds-2d.md`, "Text-layer screen entries" and "Palettes").
+//! For each engine ([`EngineFrame`]) this composes the 256-color BG
+//! palette RAM from the frame's [`PaletteLoad`]s in order (later
+//! loads overwrite earlier ones, exactly the hardware's single RAM),
+//! then walks every output pixel and composites the enabled text BG
+//! layers top-down by `BGxCNT` priority (ties to the lower BG index,
+//! the GBA convention), over the backdrop color. A layer's pixel comes
+//! from its screen entry at the scrolled position (scroll wraps
+//! within the layer's map size), the 8×8 tile that entry names —
+//! resolved against the char-block slot's [`TilePlacement`]s, the
+//! later placement winning an overlap — and the composed palette RAM:
+//! 4bpp entries pick a 16-color bank, 8bpp addresses the RAM
+//! directly, and color 0 is transparent (`docs/nds-2d.md`, "Text-layer
+//! screen entries" and "Palettes").
+//!
+//! A layer's message [`Window`]s are composited *into that layer*:
+//! their content stands in for the screen map within the rect (the
+//! fill, the printed glyphs, the cumulative scroll), the 9-slice
+//! frame around it, and the wait arrow one tile past its corner —
+//! the tilemap entries the original's window-to-VRAM copy produces,
+//! re-derived from the printing state at raster time. Window pixels
+//! belong to their owning layer's plane: they blend and prioritize
+//! as that layer does.
 //!
 //! Compositing is exact and integer end to end:
 //!
@@ -32,12 +45,22 @@
 //! inert), engine A's 3D framebuffer-as-BG0 renders as absent, and
 //! no VRAM banking exists — layers name char-block slots. A layer
 //! whose referenced asset is missing renders transparent, which is
-//! how the deferred 3D BG0 is expressed.
+//! how the deferred 3D BG0 is expressed. Two window deviations are
+//! documented in `docs/gfx.md`: a *cleared* down arrow (the
+//! printer's blank-tile erase) reverts to the layer beneath — the
+//! model carries no erased-cell state — and the glyph row-doubling
+//! table is the all-rows flag the boot flow uses, not per-row bits.
+//! The {YESNO} focus indicator samples top-most in its reserved
+//! column (pret's blit order is print order; no shipped message
+//! prints into the column) — a third deviation the same page
+//! documents.
 
 use apricorn_core::assets::AssetStore;
 use apricorn_core::cache;
+use apricorn_core::font::Font;
 use apricorn_core::frame::{
-    AssetId, BgLayer, BlendEffect, BrightnessMode, ColorMode, EngineFrame, LogicalFrame, plane,
+    ARROW_TILE_OFFSETS, AssetId, BgLayer, BlendEffect, BrightnessMode, ColorMode, EngineFrame,
+    LogicalFrame, TilePlacement, TilemapEdit, Window, plane,
 };
 
 /// The handle-resolution seam between the asset store and the
@@ -53,9 +76,10 @@ pub trait AssetSource {
     fn tiles(&self, id: AssetId) -> Option<&cache::Tiles>;
     /// The screen chunk a layer's `screen` handle names.
     fn screen(&self, id: AssetId) -> Option<&cache::Screen>;
-    /// The placed palette colors (PMCP applied) a layer's `palette`
-    /// handle names.
+    /// The placed palette colors (PMCP applied) a palette load names.
     fn placed_palette(&self, id: AssetId) -> Option<&[[u8; 4]]>;
+    /// The font a window glyph prints from.
+    fn font(&self, id: AssetId) -> Option<&Font>;
 }
 
 impl AssetSource for AssetStore {
@@ -69,6 +93,10 @@ impl AssetSource for AssetStore {
 
     fn placed_palette(&self, id: AssetId) -> Option<&[[u8; 4]]> {
         AssetStore::placed_palette(self, id)
+    }
+
+    fn font(&self, id: AssetId) -> Option<&Font> {
+        AssetStore::font(self, id)
     }
 }
 
@@ -134,19 +162,20 @@ pub fn render<S: AssetSource + ?Sized>(frame: &LogicalFrame, store: &S) -> [Scre
     ]
 }
 
-/// Renders one engine: 256×192 pixels composited from its BG layers,
-/// blend unit, backdrop, and brightness.
+/// Renders one engine: 256×192 pixels composited from its BG layers
+/// (and their windows), blend unit, backdrop, and brightness.
 fn render_engine<S: AssetSource + ?Sized>(engine: &EngineFrame, store: &S) -> ScreenBuffer {
     // The draw order: lower priority on top, ties to the lower BG
     // index. The OBJ plane is empty in Phase 3 and the backdrop is
     // handled as the bottom-most plane below.
     let mut order: [usize; 4] = [0, 1, 2, 3];
     order.sort_by_key(|&i| (engine.bgs[i].priority, i));
+    let palette = compose_palette(engine, store);
 
     let mut out = ScreenBuffer::new();
     for y in 0..ScreenBuffer::HEIGHT {
         for x in 0..ScreenBuffer::WIDTH {
-            let [r, g, b, _] = composite_pixel(engine, store, &order, x, y);
+            let [r, g, b, _] = composite_pixel(engine, store, &palette, &order, x, y);
             out.pixels[out.index(x, y)] = [r, g, b, 255];
         }
     }
@@ -154,11 +183,37 @@ fn render_engine<S: AssetSource + ?Sized>(engine: &EngineFrame, store: &S) -> Sc
     out
 }
 
+/// Composes the engine's 256-color BG palette RAM — the hardware's
+/// single RAM every 4bpp bank, 8bpp pixel, and window content of this
+/// engine decodes against.
+fn compose_palette<S: AssetSource + ?Sized>(engine: &EngineFrame, store: &S) -> Vec<[u8; 4]> {
+    // Power-on RAM is zeroed BGR555 (black); loads land in order and
+    // later loads overwrite earlier ones.
+    let mut ram = vec![[0u8, 0, 0, 255]; 256];
+    for load in &engine.palette_loads {
+        let Some(palette) = store.placed_palette(load.asset) else {
+            continue;
+        };
+        let start = usize::from(load.offset);
+        for (i, &color) in palette
+            .iter()
+            .take(usize::from(load.colors))
+            .enumerate()
+        {
+            if let Some(slot) = ram.get_mut(start + i) {
+                *slot = color;
+            }
+        }
+    }
+    ram
+}
+
 /// Composites one pixel: the topmost opaque layer pixel (by draw
 /// order) or the backdrop, alpha-blended per the engine's blend unit.
 fn composite_pixel<S: AssetSource + ?Sized>(
     engine: &EngineFrame,
     store: &S,
+    palette: &[[u8; 4]],
     order: &[usize; 4],
     x: usize,
     y: usize,
@@ -174,7 +229,7 @@ fn composite_pixel<S: AssetSource + ?Sized>(
         if !layer.enabled {
             continue;
         }
-        let Some(color) = sample_layer(store, &engine.char_blocks, layer, x, y) else {
+        let Some(color) = sample_layer(engine, store, palette, i, layer, x, y) else {
             continue;
         };
         let bit = plane::BG0 << i;
@@ -212,29 +267,35 @@ fn composite_pixel<S: AssetSource + ?Sized>(
 
 /// Samples one layer at output pixel `(x, y)` — `None` when the
 /// layer is transparent there (color 0, a missing asset, or a tile
-/// index beyond the char block).
+/// index beyond the char block). The layer's windows stand in for
+/// the screen map wherever they cover.
 fn sample_layer<S: AssetSource + ?Sized>(
+    engine: &EngineFrame,
     store: &S,
-    char_blocks: &[Option<AssetId>; 8],
+    palette: &[[u8; 4]],
+    layer_index: usize,
     layer: &BgLayer,
     x: usize,
     y: usize,
 ) -> Option<[u8; 4]> {
-    let screen_id = layer.screen?;
-    let tiles_id = char_blocks
-        .get(usize::from(layer.char_base))
-        .copied()
-        .flatten()?;
-    let palette_id = layer.palette?;
-    let screen = store.screen(screen_id)?;
-    let tiles = store.tiles(tiles_id)?;
-    let palette = store.placed_palette(palette_id)?;
-
     // The scrolled position, wrapped within the layer's map.
     let map_w = usize::from(layer.size.tiles_wide()) * 8;
     let map_h = usize::from(layer.size.tiles_tall()) * 8;
     let mx = (x + usize::from(layer.scroll_x)) % map_w;
     let my = (y + usize::from(layer.scroll_y)) % map_h;
+
+    // The windows print on top of the screen map, in model order —
+    // later windows draw over earlier ones, as tilemap writes do.
+    for window in engine.windows.iter().rev() {
+        if window.bg as usize == layer_index {
+            if let Some(color) = sample_window(engine, store, palette, window, mx, my) {
+                return Some(color);
+            }
+        }
+    }
+
+    let screen_id = layer.screen?;
+    let screen = store.screen(screen_id)?;
 
     // The screen chunk covers the map from its top-left; tiles the
     // chunk does not cover read as entry 0 (the plan's rule for
@@ -253,12 +314,47 @@ fn sample_layer<S: AssetSource + ?Sized>(
         0
     };
 
-    let tile = usize::from(entry & 0x3FF);
-    let h_flip = entry & 0x0400 != 0;
-    let v_flip = entry & 0x0800 != 0;
-    let bank = usize::from(entry >> 12);
-    if tile >= usize::try_from(tiles.tile_count()).expect("u32 fits usize") {
-        return None;
+    let mut tile = usize::from(entry & 0x3FF);
+    let mut h_flip = entry & 0x0400 != 0;
+    let mut v_flip = entry & 0x0800 != 0;
+    let mut bank = usize::from(entry >> 12);
+
+    // The tilemap-buffer rewrites made after the screen load, in push
+    // order — a later edit wins, exactly as the buffer's last write
+    // does. Edits name map-space tiles, so they cover tiles outside
+    // the screen chunk too (those read as entry 0 above).
+    for edit in &engine.tilemap_edits {
+        let (bg, left, top, width, height) = match *edit {
+            TilemapEdit::Palette { bg, left, top, width, height, .. }
+            | TilemapEdit::Fill { bg, left, top, width, height, .. } => {
+                (bg, left, top, width, height)
+            }
+        };
+        if bg as usize != layer_index {
+            continue;
+        }
+        let (left, top, width, height) = (
+            usize::from(left),
+            usize::from(top),
+            usize::from(width),
+            usize::from(height),
+        );
+        if tx < left || tx >= left + width || ty < top || ty >= top + height {
+            continue;
+        }
+        match *edit {
+            TilemapEdit::Palette { bank: edit_bank, .. } => bank = usize::from(edit_bank),
+            TilemapEdit::Fill {
+                tile: edit_tile,
+                palette,
+                ..
+            } => {
+                tile = usize::from(edit_tile);
+                bank = usize::from(palette);
+                h_flip = false;
+                v_flip = false;
+            }
+        }
     }
 
     let mut px = mx % 8;
@@ -269,7 +365,11 @@ fn sample_layer<S: AssetSource + ?Sized>(
     if v_flip {
         py = 7 - py;
     }
-    let value = tiles.pixels()[tile * 64 + py * 8 + px];
+    let (tiles, local) = resolve_tile(store, &engine.char_blocks[layer_index_char(layer)], tile)?;
+    if local >= usize::try_from(tiles.tile_count()).expect("u32 fits usize") {
+        return None;
+    }
+    let value = tiles.pixels()[local * 64 + py * 8 + px];
     if value == 0 {
         return None; // color 0 is transparent
     }
@@ -278,6 +378,244 @@ fn sample_layer<S: AssetSource + ?Sized>(
         ColorMode::Bpp8 => usize::from(value),
     };
     palette.get(index).copied()
+}
+
+/// The char-block slot a layer names — `char_base` is 0–7 in the
+/// model, matching the slot array.
+fn layer_index_char(layer: &BgLayer) -> usize {
+    layer.char_base as usize & 7
+}
+
+/// Resolves tile index `tile` against one char-block slot's
+/// placements — the placement that covers it wins, later placements
+/// over earlier ones (VRAM loads overwrite).
+fn resolve_tile<'a, S: AssetSource + ?Sized>(
+    store: &'a S,
+    block: &[TilePlacement],
+    tile: usize,
+) -> Option<(&'a cache::Tiles, usize)> {
+    block.iter().rev().find_map(|placement| {
+        let tiles = store.tiles(placement.asset)?;
+        let local = tile as i64 - i64::from(placement.tile);
+        let count = i64::from(tiles.tile_count());
+        if (0..count).contains(&local) {
+            Some((tiles, local as usize))
+        } else {
+            None
+        }
+    })
+}
+
+/// Samples one window at map pixel `(mx, my)` — `None` where the
+/// window (and its frame and arrow) is transparent there, falling
+/// through to the screen map beneath.
+fn sample_window<S: AssetSource + ?Sized>(
+    engine: &EngineFrame,
+    store: &S,
+    palette: &[[u8; 4]],
+    window: &Window,
+    mx: usize,
+    my: usize,
+) -> Option<[u8; 4]> {
+    let (rx, ry, rw, rh) = window.rect_px();
+    let (rx, ry, rw, rh) = (
+        usize::from(rx),
+        usize::from(ry),
+        usize::from(rw),
+        usize::from(rh),
+    );
+
+    // The interior: the fill, overprinted by the glyphs (a glyph's
+    // non-zero levels overwrite the buffer; its zero levels leave
+    // whatever earlier glyphs or the fill left).
+    if mx >= rx && mx < rx + rw && my >= ry && my < ry + rh {
+        return Some(sample_window_interior(store, palette, window, mx - rx, my - ry));
+    }
+
+    // The 9-slice frame: one tile thick around the rect, from
+    // (x-1, y-1) — DrawFrameAndWindow's border, entries at the
+    // frame's palette bank.
+    if let Some(frame) = window.frame {
+        let tile_x = mx / 8;
+        let tile_y = my / 8;
+        let ctx = tile_x as i32 - i32::from(window.left);
+        let cty = tile_y as i32 - i32::from(window.top);
+        let (wide, tall) = (i32::from(window.width), i32::from(window.height));
+        if (-1..=wide).contains(&ctx) && (-1..=tall).contains(&cty) {
+            let border = if ctx < 0 && cty < 0 {
+                0 // TL
+            } else if ctx == wide && cty < 0 {
+                2 // TR
+            } else if cty == tall && ctx < 0 {
+                6 // BL
+            } else if ctx == wide && cty == tall {
+                8 // BR
+            } else if cty < 0 {
+                1 // top edge
+            } else if ctx < 0 {
+                3 // left edge
+            } else if ctx == wide {
+                5 // right edge
+            } else if cty == tall {
+                7 // bottom edge
+            } else {
+                // The interior was handled above; the range check
+                // leaves nothing else.
+                return None;
+            };
+            return sample_block_tile(
+                store,
+                palette,
+                engine,
+                window,
+                u32::from(frame.base_tile) + border,
+                frame.palette,
+                mx % 8,
+                my % 8,
+            );
+        }
+    }
+
+    // The wait arrow: 2×2 tiles one tile right of the bottom-right
+    // corner (`TextPrinter_DrawDownArrow`), palette bank 1.
+    if let Some(arrow) = window.arrow {
+        let ax = usize::from(window.left) + usize::from(window.width) + 1;
+        let ay = usize::from(window.top) + usize::from(window.height) - 2;
+        let tile_x = mx / 8;
+        let tile_y = my / 8;
+        if tile_x >= ax && tile_x < ax + 2 && tile_y >= ay && tile_y < ay + 2 {
+            let pos = (tile_x - ax) + (tile_y - ay) * 2; // 0..3
+            let offset = u32::from(ARROW_TILE_OFFSETS[usize::from(arrow.index) % 4]);
+            return sample_block_tile(
+                store,
+                palette,
+                engine,
+                window,
+                u32::from(arrow.base_tile) + 18 + offset * 4 + pos as u32,
+                1,
+                mx % 8,
+                my % 8,
+            );
+        }
+    }
+
+    None
+}
+
+/// One interior pixel of the window rect at window-relative
+/// `(wx, wy)`: the fill unless a glyph's non-zero level covers it.
+fn sample_window_interior<S: AssetSource + ?Sized>(
+    store: &S,
+    palette: &[[u8; 4]],
+    window: &Window,
+    wx: usize,
+    wy: usize,
+) -> [u8; 4] {
+    // The scroll shifts the whole pixel buffer up: content at
+    // unscrolled row `r` shows at window row `r - scroll`, so the
+    // row printed at `wy` is the content at `wy + scroll`.
+    let content_y = wy + usize::from(window.scroll);
+    let bank = usize::from(window.palette) * 16;
+
+    // The {YESNO} focus indicator: the printer's blit, shifted by
+    // any scroll that landed after it (its content rows are
+    // `focus.scroll..+32`). Pret's blit order is print order — text
+    // printed after the indicator overdraws it — but every shipped
+    // message that carries `{YESNO 0}` keeps the 24-pixel column
+    // reserved, so sampling it top-most is observationally the same
+    // (a deviation `docs/gfx.md` documents).
+    if let Some(focus) = window.focus {
+        let focus_x = (usize::from(window.width) - 3) * 8;
+        let fx = wx as i64 - focus_x as i64;
+        let fy = content_y as i64 - i64::from(focus.scroll);
+        if (0..24).contains(&fx) && (0..32).contains(&fy) {
+            let (fx, fy) = (fx as usize, fy as usize);
+            // The focus NCGR is 48 tiles in 384-byte frames of
+            // twelve 8×8 4bpp tiles, three per row — pret's blit
+            // addresses it tile-major (`GetPixelAddressFromBlit4bpp`).
+            let frame = usize::from(focus.index) * 12;
+            let tile = frame + (fy / 8) * 3 + fx / 8;
+            if let Some(tiles) = store.tiles(focus.asset) {
+                let at = tile * 64 + (fy % 8) * 8 + fx % 8;
+                if let Some(&value) = tiles.pixels().get(at) {
+                    if value != 0 {
+                        // The blit's colorKey is 0: the indicator's
+                        // own zero pixels stay transparent.
+                        return palette[bank + usize::from(value & 0xF)];
+                    }
+                }
+            }
+        }
+    }
+
+    for glyph in window.glyphs.iter().rev() {
+        let Some(font) = store.font(glyph.font) else {
+            continue;
+        };
+        let g = font.glyph(glyph.glyph);
+        let (gx, gy) = (usize::from(glyph.x), usize::from(glyph.y));
+        // The copy's source clip: `srcWidth` is the glyph's advance,
+        // `srcHeight` its fixed height (doubled by the row table).
+        let height = if glyph.double_rows {
+            usize::from(g.height) * 2
+        } else {
+            usize::from(g.height)
+        };
+        if wx < gx
+            || wx >= gx + usize::from(g.width)
+            || content_y < gy
+            || content_y >= gy + height
+        {
+            continue;
+        }
+        let sx = wx - gx;
+        let sy = if glyph.double_rows {
+            (content_y - gy) / 2
+        } else {
+            content_y - gy
+        };
+        let level = g.level(sx, sy);
+        if level == 0 {
+            continue; // level 0 leaves the buffer (fill or earlier glyph)
+        }
+        let index = match level {
+            1 => glyph.color.fg,
+            2 => glyph.color.shadow,
+            _ => glyph.color.bg,
+        } & 0xF; // the window buffer is 4bpp
+        return palette[bank + usize::from(index)];
+    }
+
+    // The fill: FillWindowPixelBuffer's current value.
+    palette[bank + usize::from(window.fill & 0xF)]
+}
+
+/// Samples one 4bpp tile of the owning layer's char block at
+/// in-tile pixel `(px, py)` — the frame border and the arrow, whose
+/// tilemap entries name palette bank `bank`.
+fn sample_block_tile<S: AssetSource + ?Sized>(
+    store: &S,
+    palette: &[[u8; 4]],
+    engine: &EngineFrame,
+    window: &Window,
+    tile: u32,
+    bank: u8,
+    px: usize,
+    py: usize,
+) -> Option<[u8; 4]> {
+    let layer = &engine.bgs[usize::from(window.bg) & 3];
+    let block = &engine.char_blocks[layer_index_char(layer)];
+    let (tiles, local) = resolve_tile(store, block, tile as usize)?;
+    if local >= usize::try_from(tiles.tile_count()).expect("u32 fits usize") {
+        return None;
+    }
+    let value = tiles.pixels()[local * 64 + py * 8 + px];
+    if value == 0 {
+        return None; // color 0 is transparent
+    }
+    palette
+        .get(usize::from(bank) * 16 + usize::from(value))
+        .copied()
 }
 
 /// The alpha blend itself: `(first·EVA + second·EBV + 8) >> 4` per

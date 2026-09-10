@@ -1,11 +1,12 @@
 //! The app contract — deterministic scene logic over the frame model.
 //!
-//! An [`App`] is one scene (Phase 3: the intro's copyright beat, then
-//! the title screen): it advances on every tick, produces the logical
-//! frame for that tick, and says when it is done. A [`BootChain`]
-//! strings apps together in boot order, advancing when each finishes
-//! and cycling forever after the last — the title screen's idle
-//! timeout returns to the intro, as the game's own chain does.
+//! An [`App`] is one scene (the intro's copyright beat, the title
+//! screen, the save check, the main menu — see [`game`]): it advances
+//! on every tick, produces the logical frame for that tick, and says
+//! when it is done. A [`BootChain`] strings apps together in boot
+//! order, advancing when each finishes and cycling forever after the
+//! last — the title screen's idle timeout returns to the intro, as
+//! the game's own chain does.
 //!
 //! The contract is the seam the future harness drives: ticks are pure
 //! functions of the frame index and the input, so replaying a frame
@@ -15,7 +16,13 @@ use crate::assets::AssetStore;
 use crate::frame::LogicalFrame;
 use crate::input::Input;
 
+pub mod check_save;
+pub mod fade;
+pub mod game;
 pub mod intro_copyright;
+pub mod main_menu;
+pub mod oak_speech;
+pub mod text;
 pub mod title_screen;
 
 /// What a [`BootChain`] does after the current app's tick.
@@ -138,10 +145,10 @@ impl BootChain {
         if self.current.next() != ChainNext::Advance {
             return self.current.frame();
         }
-        // Retain the finishing frame (the frame is plain data), then
-        // construct the next app fresh — a cycle wraps to the first
-        // factory, so the restart is a reset.
-        self.last = Some(*self.current.frame());
+        // Retain the finishing frame (a clone — the frame is plain
+        // data), then construct the next app fresh — a cycle wraps to
+        // the first factory, so the restart is a reset.
+        self.last = Some(self.current.frame().clone());
         self.index = (self.index + 1) % self.factories.len();
         self.current = self.factories[self.index]();
         self.last.as_ref().expect("just stored")
