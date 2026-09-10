@@ -752,6 +752,7 @@ impl MainMenu {
                         Some(WindowFrame {
                             base_tile: FRAME0_TILE,
                             palette: 2,
+                            dialogue: false,
                         });
                     self.slot_windows[slot] = Some(index);
                     y += button.height + 2;
@@ -768,6 +769,7 @@ impl MainMenu {
                         window.frame = Some(WindowFrame {
                             base_tile: FRAME0_TILE,
                             palette: 2,
+                            dialogue: false,
                         });
                         y += button.height + 2;
                         ret = true;
@@ -833,6 +835,7 @@ impl MainMenu {
         self.frame.main.windows[index].frame = Some(WindowFrame {
             base_tile: FRAME0_TILE,
             palette: 2,
+            dialogue: false,
         });
         self.slot_windows[slot] = Some(index);
         true
@@ -913,18 +916,21 @@ impl MainMenu {
                 window.frame = Some(WindowFrame {
                     base_tile: FRAME1_TILE,
                     palette: 2,
+                    dialogue: false,
                 });
                 window.palette = 0;
             } else if slot as i32 == current {
                 window.frame = Some(WindowFrame {
                     base_tile: FRAME1_TILE,
                     palette: 3,
+                    dialogue: false,
                 });
                 window.palette = 0;
             } else {
                 window.frame = Some(WindowFrame {
                     base_tile: FRAME0_TILE,
                     palette: 2,
+                    dialogue: false,
                 });
                 window.palette = 1;
             }
@@ -943,24 +949,28 @@ impl MainMenu {
                 window.frame = Some(WindowFrame {
                     base_tile: FRAME0_TILE,
                     palette: 2,
+                    dialogue: false,
                 });
                 window.palette = 1;
             } else if self.input_mode == InputMode::Touch {
                 window.frame = Some(WindowFrame {
                     base_tile: FRAME1_TILE,
                     palette: 2,
+                    dialogue: false,
                 });
                 window.palette = 0;
             } else if i as i32 == focus {
                 window.frame = Some(WindowFrame {
                     base_tile: FRAME1_TILE,
                     palette: 3,
+                    dialogue: false,
                 });
                 window.palette = 0;
             } else {
                 window.frame = Some(WindowFrame {
                     base_tile: FRAME0_TILE,
                     palette: 2,
+                    dialogue: false,
                 });
                 window.palette = 1;
             }
@@ -1256,6 +1266,7 @@ impl MainMenu {
                     self.frame.main.windows[index].frame = Some(WindowFrame {
                         base_tile: FRAME0_TILE,
                         palette: 2,
+                        dialogue: false,
                     });
                 }
                 self.dialog_base = Some(dialog_base);

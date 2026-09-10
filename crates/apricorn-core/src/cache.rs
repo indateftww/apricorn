@@ -596,6 +596,15 @@ pub struct Tiles {
 }
 
 impl Tiles {
+    /// Extends an in-memory character block with complete decoded tiles.
+    pub(crate) fn append_tiles(&mut self, pixels: &[u8]) {
+        assert_eq!(pixels.len() % 64, 0, "whole 8x8 tiles");
+        self.tile_count += (pixels.len() / 64) as u32;
+        self.pixels.extend_from_slice(pixels);
+        // The combined character block no longer has the source sheet's grid.
+        self.grid = None;
+    }
+
     /// Parses a Tiles chunk.
     ///
     /// # Errors

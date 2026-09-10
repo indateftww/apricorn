@@ -722,7 +722,8 @@ fn game_menu_builds_and_dialogs_with_a_clean_save() {
         frame.main.windows[0].frame,
         Some(apricorn_core::frame::WindowFrame {
             base_tile: 0x3EE,
-            palette: 3
+            palette: 3,
+            dialogue: false
         }),
         "CONTINUE focused"
     );
@@ -730,7 +731,8 @@ fn game_menu_builds_and_dialogs_with_a_clean_save() {
         frame.main.windows[1].frame,
         Some(apricorn_core::frame::WindowFrame {
             base_tile: 0x3F7,
-            palette: 2
+            palette: 2,
+            dialogue: false
         }),
         "NEW GAME resting"
     );
@@ -755,7 +757,8 @@ fn game_menu_builds_and_dialogs_with_a_clean_save() {
         frame.main.windows[1].frame,
         Some(apricorn_core::frame::WindowFrame {
             base_tile: 0x3EE,
-            palette: 3
+            palette: 3,
+            dialogue: false
         }),
         "NEW GAME focused after the DOWN"
     );
@@ -763,7 +766,8 @@ fn game_menu_builds_and_dialogs_with_a_clean_save() {
         frame.main.windows[0].frame,
         Some(apricorn_core::frame::WindowFrame {
             base_tile: 0x3F7,
-            palette: 2
+            palette: 2,
+            dialogue: false
         }),
         "CONTINUE resting"
     );
@@ -799,7 +803,8 @@ fn game_menu_builds_and_dialogs_with_a_clean_save() {
         frame.main.windows[6].frame,
         Some(apricorn_core::frame::WindowFrame {
             base_tile: 0x3EE,
-            palette: 3
+            palette: 3,
+            dialogue: false
         }),
         "the countdown's end focuses Begin adventure"
     );

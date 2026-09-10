@@ -14,7 +14,7 @@ use apricorn_core::font::Font;
 use apricorn_core::frame::{
     ARROW_TILE_OFFSETS, AssetId, BgLayer, Blend, BlendEffect, BrightnessMode, ColorMode,
     EngineFrame, LogicalFrame, MasterBrightness, PaletteLoad, TextColor, TilePlacement, Window,
-    WindowArrow, WindowFocus, WindowFrame, WindowGlyph, plane,
+    WindowArrow, WindowFocus, WindowFrame, WindowGlyph, Sprite, plane,
 };
 use apricorn_gfx::{AssetSource, ScreenBuffer, render};
 use sha1::{Digest, Sha1};
@@ -29,6 +29,8 @@ enum Fix {
     Screen(cache::Screen),
     Palette(Vec<[u8; 4]>),
     Font(Font),
+    Cells(cache::Cells),
+    Animation(cache::Animation),
 }
 
 /// An in-memory [`AssetSource`]: handles index the added assets in
@@ -38,6 +40,31 @@ struct FixtureStore {
 }
 
 impl FixtureStore {
+    fn add_sprite(&mut self, tiles: AssetId, palette: AssetId) -> Sprite {
+        let header = |kind: cache::ChunkKind| {
+            let mut chunk = cache::MAGIC.to_vec();
+            chunk.extend_from_slice(&cache::VERSION.to_le_bytes());
+            chunk.extend_from_slice(&kind.code().to_le_bytes());
+            chunk
+        };
+        let mut chunk = header(cache::ChunkKind::Cells);
+        chunk.extend_from_slice(&[1, 0, 0, 0]); // one cell, 1D32K
+        chunk.extend_from_slice(&[1, 0, 0, 0]); // one OAM entry
+        for v in [-2i16, 252, 0, 252, 510, 0] { chunk.extend_from_slice(&v.to_le_bytes()); }
+        chunk.extend_from_slice(&[0; 6]); // palette, priority, shape, size, flags, mode
+        chunk.extend_from_slice(&[0; 2]); // no labels
+        let cells = AssetId::from_index(self.items.len());
+        self.items.push(Fix::Cells(cache::Cells::parse(&chunk).unwrap()));
+        let mut chunk = header(cache::ChunkKind::Animation);
+        chunk.extend_from_slice(&[1, 0]); // one sequence
+        chunk.extend_from_slice(&[1, 0, 0, 0, 1, 0, 0, 0]); // one frame, forward, cell-only
+        chunk.extend_from_slice(&[0, 0, 1, 0]); // cell 0, duration 1
+        chunk.extend_from_slice(&[0; 16]); // translation, rotation, scale
+        let animation = AssetId::from_index(self.items.len());
+        self.items.push(Fix::Animation(cache::Animation::parse(&chunk).unwrap()));
+        Sprite { tiles, palette, cells, animation, sequence: 0, elapsed: 0,
+            x: 4, y: 6, priority: 0, palette_bank: 1 }
+    }
     fn new() -> Self {
         Self { items: Vec::new() }
     }
@@ -141,6 +168,12 @@ impl FixtureStore {
 }
 
 impl AssetSource for FixtureStore {
+    fn cells(&self, id: AssetId) -> Option<&cache::Cells> {
+        match self.items.get(id.index()) { Some(Fix::Cells(cells)) => Some(cells), _ => None }
+    }
+    fn animation(&self, id: AssetId) -> Option<&cache::Animation> {
+        match self.items.get(id.index()) { Some(Fix::Animation(animation)) => Some(animation), _ => None }
+    }
     fn tiles(&self, id: AssetId) -> Option<&cache::Tiles> {
         match self.items.get(id.index()) {
             Some(Fix::Tiles(tiles)) => Some(tiles),
@@ -760,6 +793,7 @@ fn window_frame_and_arrow_draw_from_the_owning_char_block() {
         frame: Some(WindowFrame {
             base_tile: 0,
             palette: 3,
+            dialogue: false,
         }),
         arrow: Some(WindowArrow {
             base_tile: 0,
@@ -1102,4 +1136,93 @@ fn golden_composite_scene_hashes_stably() {
         "31c8daa3770fde1d76332d8aac4f53357adc1ce6",
         "engine B golden hash (empty, undimmed black)"
     );
+}
+
+#[test]
+fn window_zero_indices_reveal_lower_planes_not_the_replaced_tilemap() {
+    let mut store = FixtureStore::new();
+    let (mut frame, _) = window_frame(&mut store);
+    let screen = store.add_screen(8, 8, &[entry(0, false, false, 0)]);
+    let old = store.add_tiles(0, &[5; 64]);
+    let under = store.add_tiles(0, &[7; 64]);
+    frame.main.bgs[0].screen = Some(screen);
+    frame.main.char_blocks[0].push(place(old));
+    frame.main.bgs[1] = BgLayer { char_base: 1, ..bg_layer(screen) };
+    frame.main.char_blocks[1].push(place(under));
+    frame.main.windows[0].fill = 0;
+    frame.main.windows[0].glyphs[0].color.fg = 0;
+    let [main, _] = render(&frame, &store);
+    assert_eq!(main.pixel(0, 0)[0], 5, "old BG0 outside the window");
+    assert_eq!(main.pixel(16, 16)[0], 7, "glyph ink mapped to zero reveals BG1");
+    assert_eq!(main.pixel(31, 31)[0], 7, "zero fill reveals BG1, not palette-bank color 0");
+    assert_eq!(main.pixel(16, 17)[0], 34, "nonzero shadow remains opaque");
+}
+
+#[test]
+fn obj_cells_use_signed_offsets_separate_palettes_and_hardware_priority() {
+    let mut store = FixtureStore::new();
+    let tiles = store.add_tiles(0, &(0..64).map(|i| (i % 8) as u8).collect::<Vec<_>>());
+    let obj_palette = store.add_palette(true, &gray_palette(32));
+    let sprite = store.add_sprite(tiles, obj_palette);
+    let bg_tiles = store.add_tiles(0, &[9; 64]);
+    let bg_palette = store.add_palette(true, &[[99, 99, 99, 255]; 16]);
+    let screen = store.add_screen(8, 8, &[0]);
+    let mut frame = LogicalFrame::default();
+    frame.main.sprites.push(sprite);
+    frame.main.bgs[0] = bg_layer(screen);
+    frame.main.char_blocks[0].push(place(bg_tiles));
+    frame.main.palette_loads.push(load_palette(bg_palette));
+    let [main, _] = render(&frame, &store);
+    assert_eq!(main.pixel(3, 2)[0], 17, "(4,6) + signed (-2,-4), independent OBJ palette bank 1");
+    assert_eq!(main.pixel(2, 2)[0], 99, "OBJ index zero reveals BG0");
+    assert_eq!(main.pixel(9, 9)[0], 23, "8x8 cell ends at (9,9)");
+    assert_eq!(main.pixel(10, 9)[0], 99, "outside the cell");
+    frame.main.sprites[0].priority = 1;
+    assert_eq!(render(&frame, &store)[0].pixel(3, 2)[0], 99, "higher-priority BG hides OBJ");
+    frame.main.sprites[0].priority = 0;
+    frame.main.blend = Blend { plane1: plane::OBJ, effect: BlendEffect::BrightnessUp, evy: 16, ..Blend::default() };
+    let [main, _] = render(&frame, &store);
+    assert_eq!(main.pixel(3, 2), [255; 4], "OBJ participates in the flash");
+    assert_eq!(main.pixel(2, 2)[0], 99, "the flash leaves BG0 alone");
+}
+
+#[test]
+fn dialogue_border_uses_all_eighteen_tiles_and_arrow_keeps_border_palette() {
+    let mut store = FixtureStore::new();
+    let tiles = store.add_tiles(0, &(0..30).flat_map(|n| [(n % 15 + 1) as u8; 64]).collect::<Vec<_>>());
+    let palette = store.add_palette(true, &gray_palette(80));
+    let mut frame = LogicalFrame::default();
+    frame.main.bgs[0].enabled = true;
+    frame.main.char_blocks[0].push(place(tiles));
+    frame.main.palette_loads.push(load_palette(palette));
+    frame.main.windows.push(Window {
+        left: 2, top: 2, width: 3, height: 4, palette: 2, fill: 15,
+        frame: Some(WindowFrame { base_tile: 0, palette: 4, dialogue: true }),
+        ..Window::default()
+    });
+    let [main, _] = render(&frame, &store);
+    // The original writes six columns per row: two left, repeated
+    // center, and three right. Mid-row center is the window buffer.
+    for (y, row) in [(8, 0), (16, 1), (48, 2)] {
+        for (x, column) in [(0, 0), (8, 1), (16, 2), (40, 3), (48, 4), (56, 5)] {
+            if row == 1 && column == 2 { continue; }
+            assert_eq!(main.pixel(x, y)[0], 64 + ((row * 6 + column) % 15 + 1) as u8);
+        }
+    }
+    frame.main.windows[0].arrow = Some(WindowArrow { base_tile: 0, index: 0 });
+    let [main, _] = render(&frame, &store);
+    assert_eq!(main.pixel(48, 32)[0], 68, "arrow tile 18 replaces the side border, preserving bank 4");
+}
+
+#[test]
+fn blend_brightness_only_changes_the_displayed_target_plane() {
+    let mut store = FixtureStore::new();
+    let (mut frame, _) = window_frame(&mut store);
+    frame.main.blend = Blend { effect: BlendEffect::BrightnessUp, plane1: plane::BG0, evy: 16, ..Blend::default() };
+    let [main, _] = render(&frame, &store);
+    assert_eq!(main.pixel(16, 16), [255; 4]);
+    assert_eq!(main.pixel(0, 0), [0, 0, 0, 255], "untargeted backdrop");
+    frame.main.blend.effect = BlendEffect::BrightnessDown;
+    let [main, _] = render(&frame, &store);
+    assert_eq!(main.pixel(16, 16), [0, 0, 0, 255]);
 }

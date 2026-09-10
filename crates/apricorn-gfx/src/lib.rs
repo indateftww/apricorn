@@ -16,5 +16,6 @@
 #![deny(missing_docs)]
 
 pub mod raster;
+mod sprites;
 
 pub use raster::{AssetSource, ScreenBuffer, render};

@@ -32,13 +32,11 @@
 //!   (`DoSoundUpdateFrame`, `sound.c:100`), and the frame-model
 //!   rebuild of the window lists from the scene's windows.
 //!
-//! Deferrals, each honest in the frame: sprites and every sprite
-//!   wait (`Sprite_IsAnimated` reads an idle sprite, so those waits
-//!   finish on their first poll; the touch-advance *sprite* is
-//!   carried by the button's `anim`/`active` flags, the Marill, the
-//!   yes/no cursor, the gender cursors, and the blink they animate
-//!   — `OakSpeech_BlinkHighlightedGenderFrame`'s direct palette-RAM
-//!   writes, which the model has no mutable palette for); audio —
+//! The gender portraits, touch button and Marill now carry their ROM
+//! NCGR/NCLR/NCER/NANR resources into the OBJ renderer. Remaining
+//! deferrals: sprite-completion waits (the existing immediate-poll
+//! timeline) and the yes/no cursor;
+//! audio —
 //!   the BGM/SE/cry calls, with the *timer* of
 //!   `GF_SndStartFadeOutBGM(0, 6)` modeled, since state 47 polls
 //!   it; `SetKeyRepeatTimers(4, 8)` (no key-repeat model); the heap;
@@ -65,12 +63,28 @@ use crate::font::Font;
 use crate::frame::{
     AssetId, BgLayer, Blend, BlendEffect, ColorMode, DisplaySelect, EngineFrame, LogicalFrame,
     PaletteLoad, ScreenSize, TextColor, TilePlacement, TilemapEdit,
-    Window, WindowFrame, plane,
+    Window, WindowFrame, Sprite, plane,
 };
 use crate::input::{Input, Keys, Touch, key};
 use crate::rtc::RtcDateTime;
 use crate::text::format::MessageFormat;
 use crate::text::string::GameString;
+
+// (GF_SinDeg(degrees) * 8) >> 12 for even degrees 0..358,
+// from NitroSDK's FX_SinCosTable_ and FX_DEG_TO_IDX. Includes the
+// table-index truncation and negative arithmetic shift. The u16 angle
+// wraps after long holds, so all even degrees (not just tens) are needed.
+const GENDER_BLINK_BRIGHTNESS: [i8; 180] = [
+    0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4,
+    5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+    7, 7, 7, 7, 7, 8, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+    6, 6, 6, 6, 6, 6, 5, 5, 5, 5, 5, 4, 4, 4, 4, 4, 3, 3, 3, 3,
+    2, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0, -1, -1, -1, -2, -2, -2, -2, -3, -3,
+    -3, -3, -4, -4, -4, -4, -5, -5, -5, -5, -6, -6, -6, -6, -6, -7, -7, -7, -7, -7,
+    -7, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8,
+    -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -7, -7, -7, -7, -7, -7, -6, -6, -6, -6,
+    -6, -5, -5, -5, -5, -5, -4, -4, -4, -4, -3, -3, -3, -2, -2, -2, -2, -1, -1, -1,
+];
 
 /// `NARC_msg_msg_0219_bin` — the speech bank (`msg_0219_00000`
 /// through `msg_0219_00062`, the C's highest id).
@@ -648,6 +662,12 @@ fn blend_brightness(mask: u8, v: i16) -> Blend {
 
 /// The Oak speech scene.
 pub struct OakSpeech {
+    /// Intro OBJ resources from resdat 24/25/26/27/78.
+    gender_sprites: [Sprite; 2],
+    gender_visible: [bool; 2],
+    touch_sprite: Sprite,
+    marill_sprite: Sprite,
+    marill_visible: bool,
     /// The logical frame the last tick produced.
     frame: LogicalFrame,
     /// The palette-fade pair — both-screen works everywhere but the
@@ -706,6 +726,10 @@ pub struct OakSpeech {
     /// member 30.
     tutorial_main_pal: AssetId,
     tutorial_sub_pal: AssetId,
+    /// SUB palette word 12, saved by LoadButtonTutorialGfx.
+    gender_frame_color: u16,
+    /// The u16 degree argument passed to GF_SinDeg, advancing by ten.
+    gender_blink_angle: u16,
     /// `sButtonTutorialNSCR` — MAIN BG3's six layouts.
     button_screens: [AssetId; 6],
     /// `ov53_021E8558` — SUB BG3's five layouts.
@@ -936,7 +960,7 @@ impl OakSpeech {
             .lock()
             .expect("the asset store is only locked at app construction");
         // The frame graphics and fonts InitBgs places.
-        let gfx2_tiles = store.load_tiles(frame_narc::NARC, frame_narc::GFX2_FRAME0_CHAR)?;
+        let gfx2_tiles = store.load_default_dialogue_frame()?;
         let gfx1_tiles = store.load_tiles(frame_narc::NARC, frame_narc::FRAME0_CHAR)?;
         let gfx2_pal = store.load_palette(frame_narc::NARC, frame_narc::GFX2_FRAME0_PALETTE)?;
         let gfx1_pal = store.load_palette(frame_narc::NARC, frame_narc::PALETTE)?;
@@ -974,6 +998,9 @@ impl OakSpeech {
         let button_sub_char = store.load_tiles(narc, intro_narc::BUTTON_TUTORIAL_SUB_CHAR)?;
         let tutorial_main_pal = store.load_palette(narc, intro_narc::MAIN_PALETTE)?;
         let tutorial_sub_pal = store.load_palette(narc, intro_narc::SUB_PALETTE)?;
+        let [r, g, b, _] = store.palette(tutorial_sub_pal).expect("loaded palette").rgba()[12];
+        let gender_frame_color = u16::from(r >> 3)
+            | (u16::from(g >> 3) << 5) | (u16::from(b >> 3) << 10);
         // Each member loads once — the tables below index the loads.
         let button_screens = [
             store.load_screen(narc, intro_narc::BUTTON_TUTORIAL_SCREENS[0])?,
@@ -1038,9 +1065,33 @@ impl OakSpeech {
         let yesno_char = store.load_tiles(yesno_narc::NARC, yesno_narc::CHAR)?;
         let yesno_screen = store.load_screen(yesno_narc::NARC, yesno_narc::SCREEN)?;
 
+        // oaks_speech_obj.c / resdat 78: the two player cells share
+        // NCER 55 / NANR 56, with their own character and palette art.
+        let player_cells = store.load_cells(narc, 55)?;
+        let player_animation = store.load_animation(narc, 56)?;
+        let make_sprite = |tiles, palette, cells, animation, x, y, priority| Sprite {
+            tiles, palette, cells, animation, x, y, priority,
+            sequence: 0, elapsed: 0, palette_bank: 0,
+        };
+        let gender_sprites = [
+            make_sprite(ethan_char, ethan_pal, player_cells, player_animation, 64, 104, 0),
+            make_sprite(lyra_char, lyra_pal, player_cells, player_animation, 192, 104, 0),
+        ];
+        let touch_sprite = make_sprite(
+            store.load_tiles(narc, 60)?, store.load_palette(narc, 59)?,
+            store.load_cells(narc, 61)?, store.load_animation(narc, 62)?, 256, 192, 1);
+        let marill_sprite = make_sprite(
+            store.load_tiles(narc, 64)?, store.load_palette(narc, 63)?,
+            store.load_cells(narc, 65)?, store.load_animation(narc, 66)?, 160, 80, 0);
+
         // `memset(data, 0, …)`: the whole work zeroed, then the
         // fields Init sets on top (`oaks_speech.c:546-563`).
         Ok(Self {
+            gender_sprites,
+            gender_visible: [false; 2],
+            touch_sprite,
+            marill_sprite,
+            marill_visible: false,
             frame: LogicalFrame {
                 display: DisplaySelect::MainOnTop,
                 ..LogicalFrame::default()
@@ -1071,6 +1122,8 @@ impl OakSpeech {
             button_sub_char,
             tutorial_main_pal,
             tutorial_sub_pal,
+            gender_frame_color,
+            gender_blink_angle: 0,
             button_screens,
             sub3_screens,
             sub2_screens,
@@ -1352,6 +1405,7 @@ impl OakSpeech {
                 let engine = self.engine_mut(main);
                 engine.char_blocks = Default::default();
                 engine.palette_loads.clear();
+                engine.palette_overrides.clear();
                 engine.bgs[layer] = BgLayer {
                     enabled: false,
                     char_base: char_base(layer as u8),
@@ -1453,9 +1507,7 @@ impl OakSpeech {
             offset: 0,
             colors: TUTORIAL_SUB_PAL_COLORS,
         });
-        // genderSelectFrameDefaultPalette (:1175-1177) — a raw
-        // palette word the gender frame flash rewrites before use;
-        // deferred.
+        self.frame.sub.palette_overrides.retain(|&(index, _)| index >= TUTORIAL_SUB_PAL_COLORS);
         // SetButtonTutorialScreenLayout(1) (:1179), the
         // DrawPic(NONE, NONE) nop (:1180), ov53_021E67C4(0) (:1181).
         self.set_button_tutorial_screen_layout(1);
@@ -1534,16 +1586,16 @@ impl OakSpeech {
     }
 
     /// `ov53_021E6824` (`oaks_speech.c:1228-1249`) — the SUB BG2
-    /// menu backdrop for gender `a1` (1 male, 0 female), its scroll
+    /// menu backdrop for layout `a1` (1 confirmation, 0 tutorial), its scroll
     /// offsets included.
-    fn load_sub2_menu_backdrop(&mut self, gender: usize) {
+    fn load_sub2_menu_backdrop(&mut self, layout: usize) {
         // The NSCR from `ov53_021E8584`'s screen column, the
         // whole-map palette bank 7, NCLR member 33 at color offset
         // 112 (slot 0xE0, 0x60 bytes), and NCGR member 37 (block 4,
         // tile 0). The BG_ClearCharDataRange(SUB_2, 0x20) between
         // the palette and char loads (:1235) clears the range the
         // char load then fills — a no-op on the placements.
-        let asset = self.sub2_screens[gender];
+        let asset = self.sub2_screens[layout];
         self.load_screen(false, 2, asset);
         self.fill_bg_layer_with_palette(false, 2, 7);
         self.frame.sub.palette_loads.push(PaletteLoad {
@@ -1559,10 +1611,12 @@ impl OakSpeech {
         self.frame.sub.bgs[1].scroll_y = 0;
         // :1238-1248 — the male arm scrolls SUB_0/SUB_2/SUB_1 right
         // by 0x88; the female arm resets them.
-        let scroll = if gender == 1 { GENDER_SCROLL_X } else { 0 };
-        self.frame.sub.bgs[0].scroll_x = scroll;
-        self.frame.sub.bgs[2].scroll_x = scroll;
-        self.frame.sub.bgs[1].scroll_x = scroll;
+        if layout == 1 {
+            let scroll = if self.player_gender == 0 { GENDER_SCROLL_X } else { 0 };
+            self.frame.sub.bgs[0].scroll_x = scroll;
+            self.frame.sub.bgs[2].scroll_x = scroll;
+            self.frame.sub.bgs[1].scroll_x = scroll;
+        }
     }
 
     /// `ClearBgLayer0TopBottom` (`oaks_speech.c:2164-2167`) — the
@@ -1593,8 +1647,8 @@ impl OakSpeech {
         // BgClearTilemapBufferAndCommit(SUB_0) (:582) — InitBgs
         // cleared it a second time; the same no-op here.
         self.clear_layer(false, 0);
-        // InitSpriteEngine + CreateSprites (:583-584) — deferred,
-        // the sprite model being Phase 6.
+        self.gender_visible = [false; 2];
+        self.marill_visible = false;
         // OakSpeechYesNo_Create(bgConfig, sprites[4], 6, 4, 14,
         // heap) (:585) — CreateWindows runs at Create: the two SUB_0
         // windows, filled but unmapped until Start prints them.
@@ -1642,6 +1696,7 @@ impl OakSpeech {
                 window.frame = Some(WindowFrame {
                     base_tile: GFX2_TILE,
                     palette: 4,
+                    dialogue: true,
                 });
                 self.dialog = Some(window);
                 // TextFlags_SetCanABSpeedUpPrint(TRUE) +
@@ -1671,7 +1726,7 @@ impl OakSpeech {
                     0,
                     font_color(1),
                     TEXT_FRAME_DELAY,
-                    0,
+                    GFX2_TILE,
                 ));
                 // The construction-frame render — the print task runs
                 // after this exec.
@@ -1975,11 +2030,32 @@ impl OakSpeech {
         ret
     }
 
-    /// `OakSpeech_GenderSelectHandleInput`
-    /// (`oaks_speech.c:1394-1442`) — the gender select. The frame
-    /// blink (`OakSpeech_BlinkHighlightedGenderFrame`,
-    /// :1367-1383) writes raw palette words against the deferred
-    /// gender-cursor sprite — deferred with it; the SEs too.
+    /// `OakSpeech_BlinkHighlightedGenderFrame` / Stop (1367-1392).
+    /// Each panel uses two BG colors: its pulsing fill and outline.
+    fn gender_frame_highlight(&mut self, reset: bool, selected: bool) {
+        let brightness = if reset {
+            self.gender_blink_angle = 0;
+            0
+        } else {
+            let value = GENDER_BLINK_BRIGHTNESS[usize::from(self.gender_blink_angle % 360 / 2)];
+            self.gender_blink_angle = self.gender_blink_angle.wrapping_add(10);
+            i16::from(value)
+        };
+        self.frame.sub.palette_overrides.retain(|&(index, _)| !(12..16).contains(&index));
+        for gender in 0..2 {
+            let active = selected && gender == self.menu.cursor_pos;
+            let mut fill = 0;
+            for shift in [0, 5, 10] {
+                let channel = ((self.gender_frame_color >> shift) & 31) as i16;
+                fill |= ((channel + if active { brightness } else { 0 }).clamp(0, 31) as u16) << shift;
+            }
+            let outline = if active { 31 | (7 << 5) | (7 << 10) } else { 27 | (28 << 5) | (28 << 10) };
+            let offset = 12 + u16::from(gender) * 2;
+            self.frame.sub.palette_overrides.extend([(offset, fill), (offset + 1, outline)]);
+        }
+    }
+
+    /// `OakSpeech_GenderSelectHandleInput` (`oaks_speech.c:1394-1442`).
     fn gender_input(&mut self, input: Input, new_keys: Keys, touch_new: bool) -> bool {
         if touch_new {
             // :1401-1411 — a touch picks its gender outright.
@@ -1991,6 +2067,7 @@ impl OakSpeech {
                 self.menu.cursor_pos = hitbox as u8;
                 self.menu.press_delay = 1;
                 self.menu.flash_frames_per = 2;
+                self.gender_frame_highlight(true, true);
                 self.last_chosen_gender = hitbox as u8;
                 return true;
             }
@@ -1999,10 +2076,12 @@ impl OakSpeech {
             // :1412-1417 — the first A/LEFT/RIGHT starts pad mode.
             if new_keys.any(key::A | key::LEFT | key::RIGHT) {
                 self.menu.in_pad_mode = true;
+                self.gender_frame_highlight(true, true);
             }
             false
         } else {
-            // :1418-1439 — Blink(0) runs every pad tick (deferred).
+            // The original updates the palette before moving the cursor.
+            self.gender_frame_highlight(false, true);
             if new_keys.any(key::LEFT) {
                 if self.menu.cursor_pos != 0 {
                     self.menu.cursor_pos -= 1;
@@ -2015,6 +2094,7 @@ impl OakSpeech {
                 self.menu.in_pad_mode = false;
                 self.menu.press_delay = 1;
                 self.menu.flash_frames_per = 2;
+                self.gender_frame_highlight(true, true);
                 self.last_chosen_gender = self.menu.cursor_pos;
                 return true;
             }
@@ -2718,8 +2798,10 @@ impl OakSpeech {
                 // :1827-1833 — the dialog, then the Marill's ball
                 // drawn (the sprite, deferred).
                 if self.print_dialog_msg(input, new_keys, 34, 1) {
-                    // Sprite_SetAnimCtrlSeq(3) + SetPaletteOverride(5) +
-                    // SetDrawFlag (:1829-1831) — deferred.
+                    self.marill_sprite.sequence = 3;
+                    self.marill_sprite.elapsed = 0;
+                    self.marill_sprite.palette_bank = 1;
+                    self.marill_visible = true;
                     self.main_state = MainState::BallOpeningFlash;
                 }
             }
@@ -2742,8 +2824,9 @@ impl OakSpeech {
                 if self.brightness_main.is_brightness_transition_active()
                     && self.brightness_sub.is_brightness_transition_active()
                 {
-                    // Sprite_SetAnimCtrlSeq(1) + SetPaletteOverride(4)
-                    // (:1846-1847) — deferred.
+                    self.marill_sprite.sequence = 1;
+                    self.marill_sprite.elapsed = 0;
+                    self.marill_sprite.palette_bank = 0;
                     self.pic_anim_step = 16;
                     self.frame.main.blend = blend_brightness(plane::OBJ, 16);
                     self.main_state = MainState::MarillCry;
@@ -2757,8 +2840,8 @@ impl OakSpeech {
                 self.frame.main.blend =
                     blend_brightness(plane::OBJ, self.pic_anim_step as i16);
                 if self.pic_anim_step == 0 {
-                    // Sprite_SetAnimCtrlSeq(2) + PlayCry(MARILL)
-                    // (:1858-1859) — deferred.
+                    self.marill_sprite.sequence = 2;
+                    self.marill_sprite.elapsed = 0;
                     self.main_state = MainState::WaitMarillCry;
                 }
             }
@@ -2777,6 +2860,7 @@ impl OakSpeech {
             MainState::HideMarill => {
                 // :1874-1878 — the OBJ pseudo-layer (101) blend-out.
                 if self.blend_layer(BlendLayer::MainObj, true) {
+                    self.marill_visible = false;
                     self.main_state = MainState::WaitAfterHideMarill;
                 }
             }
@@ -2826,8 +2910,7 @@ impl OakSpeech {
                 self.touch_button_action(input, TOUCHTOADVANCE_HIDE);
                 self.frame.sub.bgs[0].enabled = false;
                 self.load_sub3_backdrop(4);
-                // SelectedGenderIndicatorSpritesAction(BOTH) (:1911) —
-                // the gender-cursor sprites, deferred.
+                self.gender_visible = [true; 2];
                 self.clear_layer(false, 2);
                 self.fade.begin_with_screens(
                     FadeScreens::Sub,
@@ -2868,8 +2951,7 @@ impl OakSpeech {
                 // BgCommitTilemapBufferToVram(SUB_2/SUB_3) (:1930-1931)
                 // — the edits already in the frame's list.
                 self.clear_layer(false, 0);
-                // SelectedGenderIndicatorSpritesAction (:1933) —
-                // deferred.
+                self.gender_visible = [self.player_gender == 0, self.player_gender == 1];
                 self.queued_msg = if self.player_gender == 0 { 38 } else { 39 };
                 self.main_state = MainState::AskConfirmGender;
             }
@@ -2929,14 +3011,12 @@ impl OakSpeech {
                 if self.fade.is_finished() {
                     self.frame.sub.bgs[1].enabled = false;
                     self.frame.sub.bgs[2].enabled = false;
-                    // SelectedGenderIndicatorSpritesAction(NEITHER)
-                    // (:1979) — deferred.
+                    self.gender_visible = [false; 2];
                     self.load_sub3_backdrop(1);
                     self.clear_layer(false, 0);
                     // ScheduleSetBgPosText(SUB_0, SET_X, 0) (:1982).
                     self.frame.sub.bgs[0].scroll_x = 0;
-                    // StopHighlightedGenderFrameBlink (:1983) — the
-                    // blink palette writes, deferred with the sprites.
+                    self.gender_frame_highlight(true, false);
                     self.fade.begin_with_screens(
                         FadeScreens::Sub,
                         FadeType::BrightnessIn,
@@ -2996,8 +3076,7 @@ impl OakSpeech {
                     .begin_with_screens(FadeScreens::Both, FadeType::BrightnessIn, FadeColor::Black, 6, 1);
                 self.main_state = MainState::ConfirmNameYesNoInitMenu;
                 self.draw_pic(Pic::Oak);
-                // SelectedGenderIndicatorSpritesAction (:2028) —
-                // deferred.
+                self.gender_visible = [self.player_gender == 0, self.player_gender == 1];
                 // The gendered grammar vestige (:2029-2030); both
                 // messages read the same in English.
                 self.queued_msg = if self.player_gender == 0 { 41 } else { 42 };
@@ -3062,8 +3141,7 @@ impl OakSpeech {
                     self.frame.sub.bgs[2].enabled = false;
                     self.frame.sub.bgs[1].enabled = false;
                     self.load_sub3_backdrop(1);
-                    // SelectedGenderIndicatorSpritesAction(NEITHER)
-                    // (:2074) — deferred.
+                    self.gender_visible = [false; 2];
                     self.clear_layer(false, 0);
                     // ScheduleSetBgPosText(SUB_0, SET_X, 0) (:2076).
                     self.frame.sub.bgs[0].scroll_x = 0;
@@ -3171,6 +3249,9 @@ impl OakSpeech {
     /// (`oaks_speech.c:752-770`): the printer dropped and all eight
     /// planes off.
     fn cleanup(&mut self) {
+        self.gender_visible = [false; 2];
+        self.marill_visible = false;
+        self.touch_active = false;
         self.printer = None;
         for bg in &mut self.frame.main.bgs {
             bg.enabled = false;
@@ -3324,6 +3405,20 @@ impl App for OakSpeech {
             sub_windows.push(self.yesno_windows[1].clone());
         }
         self.frame.sub.windows = sub_windows;
+        self.frame.main.sprites.clear();
+        self.frame.sub.sprites.clear();
+        if self.marill_visible {
+            self.frame.main.sprites.push(self.marill_sprite.clone());
+            self.marill_sprite.elapsed = self.marill_sprite.elapsed.saturating_add(1);
+        }
+        for (sprite, visible) in self.gender_sprites.iter_mut().zip(self.gender_visible) {
+            if visible { self.frame.sub.sprites.push(sprite.clone()); }
+            sprite.elapsed = sprite.elapsed.saturating_add(1);
+        }
+        if self.touch_active {
+            self.touch_sprite.sequence = usize::from(self.touch_anim);
+            self.frame.sub.sprites.push(self.touch_sprite.clone());
+        }
     }
 
     fn frame(&self) -> &LogicalFrame {

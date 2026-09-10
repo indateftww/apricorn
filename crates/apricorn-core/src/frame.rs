@@ -247,10 +247,9 @@ pub struct WindowGlyph {
     pub double_rows: bool,
 }
 
-/// A window's 9-slice frame — pret `DrawFrameAndWindow1/2`'s border,
-/// drawn into the tilemap *around* the window rect (one tile thick,
-/// from `x-1, y-1`) from the frame graphics placed in the window's
-/// own char block.
+/// A window's border, drawn from graphics in its own char block.
+/// Menus use `DrawFrameAndWindow1`'s nine tiles; dialogue uses
+/// `DrawFrameAndWindow2`'s wider eighteen-tile layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowFrame {
     /// The char-block tile offset the frame NCGR loaded at.
@@ -258,6 +257,9 @@ pub struct WindowFrame {
     /// The palette bank of the border's tilemap entries (the frame
     /// NCLR loads 16 colors into this bank).
     pub palette: u8,
+    /// True for `DrawFrameAndWindow2`: an 18-tile dialogue border,
+    /// two tiles left and three tiles right of the window interior.
+    pub dialogue: bool,
 }
 
 /// The wait-for-input down arrow — `TextPrinter_DrawDownArrow`'s
@@ -265,9 +267,9 @@ pub struct WindowFrame {
 /// window's bottom-right corner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowArrow {
-    /// The arrow's base tile (`sDownArrowBaseTile`; the four frames
-    /// live at `+18..+21` stepping by 4, the cleared state at
-    /// `+10/+11`).
+    /// The dialogue frame's base tile (`sDownArrowBaseTile`). Three
+    /// composed arrow poses live at `+18..+29`; clearing restores
+    /// border tiles `+10/+11`.
     pub base_tile: u16,
     /// The animation position — one step per 8 held frames, walking
     /// `sDownArrowTileOffsets` = {0, 1, 2, 1}.
@@ -338,7 +340,7 @@ pub struct Window {
     /// The cumulative pixel scroll (`ScrollWindow`'s shifting, in
     /// the original applied to the buffer; here a translation).
     pub scroll: u16,
-    /// The 9-slice border around the rect, if drawn.
+    /// The menu or dialogue border around the rect, if drawn.
     pub frame: Option<WindowFrame>,
     /// The wait indicator at the rect's bottom-right corner, if
     /// shown.
@@ -392,7 +394,7 @@ pub mod plane {
     pub const BG2: u8 = 0x04;
     /// Engine BG3.
     pub const BG3: u8 = 0x08;
-    /// The OBJ (sprite) plane — always empty in Phase 3 (no sprites).
+    /// The OBJ (sprite) plane.
     pub const OBJ: u8 = 0x10;
     /// The backdrop.
     pub const BD: u8 = 0x20;
@@ -421,9 +423,8 @@ pub enum BlendEffect {
 /// the brightness effects carry the `BLDY` weight on [`Blend::evy`]
 /// (the sign that picked the effect is the effect itself —
 /// `GXx_SetBlendBrightness_` writes Down for a negative value, Up for a
-/// positive one). The rasterizer implements the alpha effect
-/// (`raster.rs`); the brightness effects are frame-model state for now —
-/// the Oak speech is their first user, and its fades end at evy 0.
+/// positive one). The rasterizer applies this to the displayed target
+/// plane before master brightness, including Oak's OBJ flash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Blend {
     /// The first-target plane mask (`plane::*` bits).
@@ -512,6 +513,31 @@ pub enum BrightnessMode {
     Down,
 }
 
+/// A sprite assembled from a ROM cell and animation bank.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sprite {
+    /// Character graphics.
+    pub tiles: AssetId,
+    /// OBJ palette, independent of BG palette RAM.
+    pub palette: AssetId,
+    /// Cell geometry and OAM attributes.
+    pub cells: AssetId,
+    /// Animation sequences.
+    pub animation: AssetId,
+    /// Active sequence index.
+    pub sequence: usize,
+    /// Ticks since the sequence was selected.
+    pub elapsed: u32,
+    /// Screen-space origin.
+    pub x: i16,
+    /// Screen-space origin.
+    pub y: i16,
+    /// Hardware OBJ priority relative to BG layers (0 is foremost).
+    pub priority: u8,
+    /// Palette bank within the sprite's loaded palette.
+    pub palette_bank: u8,
+}
+
 /// One 2D engine's state — four text BG layers over the blend and
 /// brightness units, the named char-block slots, the composed BG
 /// palette RAM, and the message windows printing into the layers.
@@ -535,8 +561,14 @@ pub struct EngineFrame {
     /// every 4bpp bank and 8bpp pixel of this engine decodes against,
     /// exactly the hardware's single RAM.
     pub palette_loads: Vec<PaletteLoad>,
+    /// Live BG palette words (color index, BGR555), applied after asset
+    /// loads. Scenes replace entries in place and clear affected entries
+    /// when reloading that palette range.
+    pub palette_overrides: Vec<(u16, u16)>,
     /// The message windows on this engine's layers.
     pub windows: Vec<Window>,
+    /// Visible sprites in OAM order (earlier wins a sprite overlap).
+    pub sprites: Vec<Sprite>,
     /// The tilemap-buffer rewrites made since the layers' screen
     /// assets loaded, applied after them at raster time in push order
     /// (a later edit wins). A screen load or tilemap clear for a layer
@@ -677,6 +709,7 @@ mod tests {
             frame: Some(WindowFrame {
                 base_tile: 0x3E2,
                 palette: 4,
+                dialogue: false,
             }),
             arrow: Some(WindowArrow {
                 base_tile: 0,

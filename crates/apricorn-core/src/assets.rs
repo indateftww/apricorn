@@ -28,7 +28,7 @@ use std::path::Path;
 
 use crate::cache;
 use crate::font::Font;
-use crate::formats::{MsgBank, Narc, Ncgr, Nclr, Nscr};
+use crate::formats::{MsgBank, Narc, Ncgr, Nclr, Nscr, Ncer, Nanr};
 use crate::frame::AssetId;
 use crate::nds::{NdsError, NdsRom, lz10};
 
@@ -182,6 +182,8 @@ pub mod frame_narc {
     /// Frame id 0's tiles through `LoadUserFrameGfx2` — member
     /// frame + 2 (`sub_0200E63C`).
     pub const GFX2_FRAME0_CHAR: usize = 2;
+    /// Three 16x16 down-arrow poses (`sub_0200EB68`, member 0x16).
+    pub const DOWN_ARROW_CHAR: usize = 0x16;
     /// The frames' 16-color palette (`LoadUserFrameGfx1`, frame
     /// id 2 uses member 0x2E).
     pub const PALETTE: usize = 0x19;
@@ -345,6 +347,10 @@ enum Asset {
     Font(Font),
     /// A decoded message bank (a Text chunk).
     Text(cache::Text),
+    /// Sprite cell geometry.
+    Cells(cache::Cells),
+    /// Sprite animation sequences.
+    Animation(cache::Animation),
 }
 
 /// The boot scenes' asset source: a parsed retail dump plus the assets
@@ -364,6 +370,78 @@ pub struct AssetStore {
 }
 
 impl AssetStore {
+    /// Loads the default dialogue frame and builds its down-arrow tiles.
+    ///
+    /// `sub_0200EA68` repeats frame tiles 10/11 under each 16x16 pose,
+    /// then blits member 22 with source X=3, width=13 and color key 0.
+    /// The three resulting poses occupy tiles 18..30 after the border.
+    ///
+    /// # Errors
+    /// Returns an error if either ROM member is missing or malformed.
+    pub fn load_default_dialogue_frame(&mut self) -> Result<AssetId, AssetsError> {
+        let narc = frame_narc::NARC;
+        let bytes = self.member(narc, frame_narc::GFX2_FRAME0_CHAR)?;
+        let mut border = decode_tiles(&bytes, narc, frame_narc::GFX2_FRAME0_CHAR)?;
+        let bytes = self.member(narc, frame_narc::DOWN_ARROW_CHAR)?;
+        let arrow = decode_tiles(&bytes, narc, frame_narc::DOWN_ARROW_CHAR)?;
+        if !border.is_4bpp() || border.tile_count() != 18
+            || !arrow.is_4bpp() || arrow.tile_count() < 12
+        {
+            return Err(AssetsError::Corrupt {
+                what: "default dialogue frame / down arrow".to_owned(),
+                source: NdsError::Invalid { what: "expected 18 border tiles and three 16x16 arrow poses" },
+            });
+        }
+        let mut poses = vec![0; 12 * 64];
+        for y in 0..48 {
+            for x in 0..16 {
+                let at = ((y / 8) * 2 + x / 8) * 64 + (y % 8) * 8 + x % 8;
+                let background = border.pixels()[(10 + x / 8) * 64 + (y % 8) * 8 + x % 8];
+                let ink = if x < 13 {
+                    let source_x = x + 3;
+                    arrow.pixels()[((y / 8) * 2 + source_x / 8) * 64 + (y % 8) * 8 + source_x % 8]
+                } else { 0 };
+                poses[at] = if ink == 0 { background } else { ink };
+            }
+        }
+        border.append_tiles(&poses);
+        Ok(self.push(Asset::Tiles(border)))
+    }
+
+    /// Loads a sprite's NCER cell bank from the ROM.
+    ///
+    /// # Errors
+    /// Returns an error for missing or malformed cell data.
+    pub fn load_cells(&mut self, narc: &str, member: usize) -> Result<AssetId, AssetsError> {
+        let bytes = self.member(narc, member)?;
+        let cells = Ncer::parse(&bytes).and_then(|data| cache::Cells::parse(&cache::encode_cells(&data)))
+            .map_err(|source| AssetsError::Corrupt { what: format!("{narc}#{member}"), source })?;
+        Ok(self.push(Asset::Cells(cells)))
+    }
+
+    /// Loads a sprite's NANR animation bank from the ROM.
+    ///
+    /// # Errors
+    /// Returns an error for missing or malformed animation data.
+    pub fn load_animation(&mut self, narc: &str, member: usize) -> Result<AssetId, AssetsError> {
+        let bytes = self.member(narc, member)?;
+        let animation = Nanr::parse(&bytes).and_then(|data| cache::encode_animation(&data))
+            .and_then(|data| cache::Animation::parse(&data))
+            .map_err(|source| AssetsError::Corrupt { what: format!("{narc}#{member}"), source })?;
+        Ok(self.push(Asset::Animation(animation)))
+    }
+
+    /// Resolves a sprite cell bank.
+    #[must_use]
+    pub fn cells(&self, id: AssetId) -> Option<&cache::Cells> {
+        match self.assets.get(id.index()) { Some(Asset::Cells(cells)) => Some(cells), _ => None }
+    }
+
+    /// Resolves a sprite animation bank.
+    #[must_use]
+    pub fn animation(&self, id: AssetId) -> Option<&cache::Animation> {
+        match self.assets.get(id.index()) { Some(Asset::Animation(animation)) => Some(animation), _ => None }
+    }
     /// The SHA-1 of the retail dump the asset tables are pinned to
     /// (HeartGold US) — the same constant `apicorn-harness` traces and
     /// `apicorn-tools verify` carry.

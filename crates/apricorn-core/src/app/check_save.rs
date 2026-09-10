@@ -235,7 +235,7 @@ impl CheckSave {
             .expect("the asset store is only locked at app construction");
         // The graphics the SETUP pass draws from: both frames and
         // their palettes, the font, the message bank.
-        let gfx2_tiles = store.load_tiles(frame_narc::NARC, frame_narc::GFX2_FRAME0_CHAR)?;
+        let gfx2_tiles = store.load_default_dialogue_frame()?;
         let gfx1_tiles = store.load_tiles(frame_narc::NARC, frame_narc::FRAME0_CHAR)?;
         let gfx2_pal = store.load_palette(frame_narc::NARC, frame_narc::GFX2_FRAME0_PALETTE)?;
         let gfx1_pal = store.load_palette(frame_narc::NARC, frame_narc::PALETTE)?;
@@ -458,6 +458,7 @@ impl CheckSave {
                     window.frame = Some(WindowFrame {
                         base_tile: GFX2_TILE,
                         palette: 2,
+                        dialogue: true,
                     });
                 }
                 let units = self.messages[self.msg_num].clone();
@@ -470,7 +471,7 @@ impl CheckSave {
                     0,
                     font_color(1),
                     TEXT_SPEED,
-                    0,
+                    GFX2_TILE,
                 ));
                 // The construction-frame print: the sys task runs
                 // after this exec, so the first glyph lands now.

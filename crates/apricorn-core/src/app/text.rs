@@ -38,9 +38,9 @@
 //! down-arrow animation index *cycles* `% 4`
 //! (`sDownArrowTileOffsets` has four entries but the C increments
 //! `downArrowYPosIdx` unbounded), and the arrow's base tile is a
-//! per-printer field defaulting 0 (pret's `sDownArrowBaseTile`
-//! global — `TextPrinter_SetDownArrowBaseTile` — which the
-//! boot-to-Oak flow never sets). The finished printer carries no
+//! per-printer field (pret's `sDownArrowBaseTile` global, set by
+//! `DrawFrameAndWindow2` to the dialogue frame's tile address).
+//! The finished printer carries no
 //! pret state number: `is_finished` marks the sentinel the string's
 //! EOS sets.
 //!
@@ -336,8 +336,8 @@ impl TextPrinter {
     /// (`sFonts[fontId]`); `font`/`focus_gfx` are the loaded font
     /// and focus-indicator assets the pushed glyphs and focus state
     /// reference. `arrow_base_tile` is
-    /// `TextPrinter_SetDownArrowBaseTile`'s global — 0 in the
-    /// boot-to-Oak flow.
+    /// `TextPrinter_SetDownArrowBaseTile`'s global, set to the
+    /// frame's base tile when the scene draws a dialogue border.
     ///
     /// Like `AddTextPrinter`, a per-frame speed prints its first
     /// character on the *construction* frame: pret's
@@ -896,8 +896,9 @@ impl TextPrinter {
             self.down_arrow_ypos_idx = 0;
             self.down_arrow_delay = 0;
         }
-        // sub_0200EB68 loads the arrow graphics; the model's arrow
-        // resolves through the owning layer at raster time.
+        // sub_0200EB68 assembles the arrow over border tiles 10/11.
+        // The scene's dialogue-frame loader prepares those three poses;
+        // the model's arrow resolves through the owning layer at raster time.
     }
 
     /// `TextPrinter_DrawDownArrow`: the 2×2-tile animation state.
@@ -920,8 +921,7 @@ impl TextPrinter {
     }
 
     /// `TextPrinter_ClearDownArrow` — pret writes blank tiles; the
-    /// model's documented deviation reverts to the layer beneath
-    /// (`docs/gfx.md`).
+    /// model restores the dialogue border underneath the arrow.
     fn clear_down_arrow(&mut self, window: &mut Window) {
         window.arrow = None;
     }

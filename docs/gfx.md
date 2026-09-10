@@ -157,6 +157,36 @@ load — which is what the model carries.
 
 ## The rasterizer (`apricorn-gfx`)
 
+The intro renderer also draws the ROM's Ethan/Lyra selection portraits,
+touch-advance button, and Marill using the resource tables in
+`oaks_speech_obj.c` and `resdat` members 24–27/78. OBJ uses separate
+palettes, signed cell offsets, 1D/2D tile addressing, flips, and the
+intro's axis-aligned NANR transforms. OAM order resolves sprite overlaps;
+OBJ wins a BG priority tie. Plane brightness and alpha blending apply
+before master brightness. General rotated sprites, mosaic, the yes/no
+cursor and sprite-completion timing
+remain deferred.
+
+Gender selection updates SUB BG palette words 12–15 with the original
+red outline and sine-driven fill brightness. The frame carries mutable
+BGR555 palette overrides separately from immutable ROM palette loads.
+
+Window pixel index zero is transparent regardless of the color stored
+at that palette-bank entry. Window tilemap writes still replace the old
+map on their own layer. Menu borders use nine tiles; dialogue borders
+use `render_window.s`'s eighteen-tile layout (two tiles left, three right).
+Down arrows overwrite that border while preserving its palette bank.
+The dialogue-frame loader also reproduces `sub_0200EA68`: the three
+arrow poses from frame archive member 22 are shifted left three pixels
+and blitted over border tiles 10/11 with index zero as the color key.
+The printer addresses these composed tiles at the frame's base plus 18.
+Holding a paragraph pause and then advancing is covered by a ROM test
+that checks all four animation steps and verifies the border is restored.
+
+`tests/oak_hg.rs` replays the tutorial, dialogue, Marill, and gender menu.
+Set `APRICORN_RENDER_OUT` to an ignored output directory when running it
+to save PNGs for visual review. No ROM pixels are committed.
+
 `render(frame, store) -> [ScreenBuffer; 2]`: per engine, screen-entry
 decode, tile fetch, scroll wrap per size (256/512 masks),
 priority compositing (tie → lower BG index; pixel 0 transparent),

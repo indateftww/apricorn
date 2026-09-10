@@ -40,20 +40,18 @@
 //!   up is `c + (255 - c)·value >> 4`, down is `c - c·value >> 4`
 //!   (the register's 5-bit weight, value 16 reaches the limit).
 //!
-//! Deferred per `docs/nds-2d.md` and honored here: the OBJ plane is
-//! empty (contributes no pixels, but its blend-mask bit stays
-//! inert), engine A's 3D framebuffer-as-BG0 renders as absent, and
+//! Intro OBJ cells are rasterized with their own palettes and OAM
+//! ordering, winning BG priority ties. Engine A's 3D framebuffer-as-BG0
+//! still renders as absent, and
 //! no VRAM banking exists — layers name char-block slots. A layer
 //! whose referenced asset is missing renders transparent, which is
-//! how the deferred 3D BG0 is expressed. Two window deviations are
-//! documented in `docs/gfx.md`: a *cleared* down arrow (the
-//! printer's blank-tile erase) reverts to the layer beneath — the
-//! model carries no erased-cell state — and the glyph row-doubling
-//! table is the all-rows flag the boot flow uses, not per-row bits.
+//! how the deferred 3D BG0 is expressed. Dialogue arrows contain
+//! the original border pixels under their ink; clearing an arrow
+//! restores that border. The glyph row-doubling table is the
+//! all-rows flag the boot flow uses, not per-row bits.
 //! The {YESNO} focus indicator samples top-most in its reserved
 //! column (pret's blit order is print order; no shipped message
-//! prints into the column) — a third deviation the same page
-//! documents.
+//! prints into the column).
 
 use apricorn_core::assets::AssetStore;
 use apricorn_core::cache;
@@ -80,9 +78,15 @@ pub trait AssetSource {
     fn placed_palette(&self, id: AssetId) -> Option<&[[u8; 4]]>;
     /// The font a window glyph prints from.
     fn font(&self, id: AssetId) -> Option<&Font>;
+    /// Sprite geometry, if this source provides it.
+    fn cells(&self, _id: AssetId) -> Option<&cache::Cells> { None }
+    /// Sprite animations, if this source provides them.
+    fn animation(&self, _id: AssetId) -> Option<&cache::Animation> { None }
 }
 
 impl AssetSource for AssetStore {
+    fn cells(&self, id: AssetId) -> Option<&cache::Cells> { AssetStore::cells(self, id) }
+    fn animation(&self, id: AssetId) -> Option<&cache::Animation> { AssetStore::animation(self, id) }
     fn tiles(&self, id: AssetId) -> Option<&cache::Tiles> {
         AssetStore::tiles(self, id)
     }
@@ -166,16 +170,17 @@ pub fn render<S: AssetSource + ?Sized>(frame: &LogicalFrame, store: &S) -> [Scre
 /// (and their windows), blend unit, backdrop, and brightness.
 fn render_engine<S: AssetSource + ?Sized>(engine: &EngineFrame, store: &S) -> ScreenBuffer {
     // The draw order: lower priority on top, ties to the lower BG
-    // index. The OBJ plane is empty in Phase 3 and the backdrop is
-    // handled as the bottom-most plane below.
+    // index. OBJ pixels join this order by priority, winning BG ties;
+    // the backdrop is handled as the bottom-most plane below.
     let mut order: [usize; 4] = [0, 1, 2, 3];
     order.sort_by_key(|&i| (engine.bgs[i].priority, i));
     let palette = compose_palette(engine, store);
+    let objects = crate::sprites::rasterize(engine, store);
 
     let mut out = ScreenBuffer::new();
     for y in 0..ScreenBuffer::HEIGHT {
         for x in 0..ScreenBuffer::WIDTH {
-            let [r, g, b, _] = composite_pixel(engine, store, &palette, &order, x, y);
+            let [r, g, b, _] = composite_pixel(engine, store, &palette, &order, objects[y * 256 + x], x, y);
             out.pixels[out.index(x, y)] = [r, g, b, 255];
         }
     }
@@ -205,6 +210,11 @@ fn compose_palette<S: AssetSource + ?Sized>(engine: &EngineFrame, store: &S) -> 
             }
         }
     }
+    for &(index, color) in &engine.palette_overrides {
+        if let Some(slot) = ram.get_mut(usize::from(index)) {
+            *slot = backdrop_rgba(color);
+        }
+    }
     ram
 }
 
@@ -215,27 +225,31 @@ fn composite_pixel<S: AssetSource + ?Sized>(
     store: &S,
     palette: &[[u8; 4]],
     order: &[usize; 4],
+    object: Option<crate::sprites::Pixel>,
     x: usize,
     y: usize,
 ) -> [u8; 4] {
     let blending = matches!(engine.blend.effect, BlendEffect::Alpha) && engine.blend.plane1 != 0;
     // The displayed pixel (topmost opaque), and — when it is a blend
     // first target — the second target found below it.
-    let mut top: Option<([u8; 4], bool)> = None; // (color, plane in plane1)
+    let mut top: Option<([u8; 4], bool, u8)> = None;
     let mut second: Option<[u8; 4]> = None;
 
-    for &i in order {
-        let layer = &engine.bgs[i];
-        if !layer.enabled {
-            continue;
-        }
-        let Some(color) = sample_layer(engine, store, palette, i, layer, x, y) else {
-            continue;
+    let object_slot = object.map(|obj| order.iter().position(|&i| engine.bgs[i].priority >= obj.priority).unwrap_or(4));
+    for slot in 0..4 + usize::from(object.is_some()) {
+        let (color, bit, semi) = if object_slot == Some(slot) {
+            let obj = object.expect("the inserted OBJ pixel");
+            (obj.color, plane::OBJ, obj.semi)
+        } else {
+            let i = order[slot - usize::from(object_slot.is_some_and(|at| at < slot))];
+            let layer = &engine.bgs[i];
+            if !layer.enabled { continue; }
+            let Some(color) = sample_layer(engine, store, palette, i, layer, x, y) else { continue; };
+            (color, plane::BG0 << i, false)
         };
-        let bit = plane::BG0 << i;
         if top.is_none() {
-            let blend_top = blending && engine.blend.plane1 & bit != 0;
-            top = Some((color, blend_top));
+            let blend_top = semi || (blending && engine.blend.plane1 & bit != 0);
+            top = Some((color, blend_top, bit));
             // A topmost pixel outside plane1 passes through
             // unblended — nothing below can change it.
             if !blend_top {
@@ -248,10 +262,21 @@ fn composite_pixel<S: AssetSource + ?Sized>(
     }
 
     let backdrop = backdrop_rgba(engine.backdrop);
-    let (color, blend_top) = match top {
-        Some((color, blend_top)) => (color, blend_top),
-        None => (backdrop, false),
+    let (mut color, blend_top, bit) = match top {
+        Some(top) => top,
+        None => (backdrop, false, plane::BD),
     };
+    if !blend_top && engine.blend.plane1 & bit != 0 {
+        let weight = u32::from(engine.blend.evy.min(16));
+        for channel in &mut color[..3] {
+            let c = u32::from(*channel);
+            *channel = match engine.blend.effect {
+                BlendEffect::BrightnessUp => (c + ((255 - c) * weight >> 4)) as u8,
+                BlendEffect::BrightnessDown => (c - (c * weight >> 4)) as u8,
+                _ => *channel,
+            };
+        }
+    }
     // The backdrop is the bottom-most plane: it completes a second
     // target search (as plane BD) but never starts one here — there
     // is nothing below it to blend with.
@@ -288,6 +313,14 @@ fn sample_layer<S: AssetSource + ?Sized>(
     // later windows draw over earlier ones, as tilemap writes do.
     for window in engine.windows.iter().rev() {
         if window.bg as usize == layer_index {
+            let (left, top, width, height) = window.rect_px();
+            if mx >= usize::from(left) && mx < usize::from(left + width)
+                && my >= usize::from(top) && my < usize::from(top + height)
+            {
+                // Window tilemap entries replace this layer's old map, even
+                // when the resulting pixel is transparent to lower planes.
+                return sample_window(engine, store, palette, window, mx, my);
+            }
             if let Some(color) = sample_window(engine, store, palette, window, mx, my) {
                 return Some(color);
             }
@@ -429,7 +462,31 @@ fn sample_window<S: AssetSource + ?Sized>(
     // non-zero levels overwrite the buffer; its zero levels leave
     // whatever earlier glyphs or the fill left).
     if mx >= rx && mx < rx + rw && my >= ry && my < ry + rh {
-        return Some(sample_window_interior(store, palette, window, mx - rx, my - ry));
+        return sample_window_interior(store, palette, window, mx - rx, my - ry);
+    }
+
+    // The wait arrow: 2×2 tiles one tile right of the bottom-right
+    // corner (`TextPrinter_DrawDownArrow`). Palette argument 0x10
+    // preserves the dialogue border's bank rather than selecting bank 1.
+    if let Some(arrow) = window.arrow {
+        let ax = usize::from(window.left) + usize::from(window.width) + 1;
+        let ay = usize::from(window.top) + usize::from(window.height) - 2;
+        let tile_x = mx / 8;
+        let tile_y = my / 8;
+        if tile_x >= ax && tile_x < ax + 2 && tile_y >= ay && tile_y < ay + 2 {
+            let pos = (tile_x - ax) + (tile_y - ay) * 2; // 0..3
+            let offset = u32::from(ARROW_TILE_OFFSETS[usize::from(arrow.index) % 4]);
+            return sample_block_tile(
+                store,
+                palette,
+                engine,
+                window,
+                u32::from(arrow.base_tile) + 18 + offset * 4 + pos as u32,
+                window.frame.filter(|f| f.dialogue).map_or(1, |f| f.palette),
+                mx % 8,
+                my % 8,
+            );
+        }
     }
 
     // The 9-slice frame: one tile thick around the rect, from
@@ -441,7 +498,16 @@ fn sample_window<S: AssetSource + ?Sized>(
         let ctx = tile_x as i32 - i32::from(window.left);
         let cty = tile_y as i32 - i32::from(window.top);
         let (wide, tall) = (i32::from(window.width), i32::from(window.height));
-        if (-1..=wide).contains(&ctx) && (-1..=tall).contains(&cty) {
+        if frame.dialogue && (-2..=wide + 2).contains(&ctx) && (-1..=tall).contains(&cty) {
+            // render_window.s sub_0200E6B4: six columns per row.
+            // The interior column repeats across the window's width.
+            let column = if ctx < 0 { ctx + 2 } else if ctx >= wide { ctx - wide + 3 } else { 2 };
+            let row = if cty < 0 { 0 } else if cty == tall { 2 } else { 1 };
+            return sample_block_tile(store, palette, engine, window,
+                u32::from(frame.base_tile) + (row * 6 + column) as u32,
+                frame.palette, mx % 8, my % 8);
+        }
+        if !frame.dialogue && (-1..=wide).contains(&ctx) && (-1..=tall).contains(&cty) {
             let border = if ctx < 0 && cty < 0 {
                 0 // TL
             } else if ctx == wide && cty < 0 {
@@ -476,28 +542,6 @@ fn sample_window<S: AssetSource + ?Sized>(
         }
     }
 
-    // The wait arrow: 2×2 tiles one tile right of the bottom-right
-    // corner (`TextPrinter_DrawDownArrow`), palette bank 1.
-    if let Some(arrow) = window.arrow {
-        let ax = usize::from(window.left) + usize::from(window.width) + 1;
-        let ay = usize::from(window.top) + usize::from(window.height) - 2;
-        let tile_x = mx / 8;
-        let tile_y = my / 8;
-        if tile_x >= ax && tile_x < ax + 2 && tile_y >= ay && tile_y < ay + 2 {
-            let pos = (tile_x - ax) + (tile_y - ay) * 2; // 0..3
-            let offset = u32::from(ARROW_TILE_OFFSETS[usize::from(arrow.index) % 4]);
-            return sample_block_tile(
-                store,
-                palette,
-                engine,
-                window,
-                u32::from(arrow.base_tile) + 18 + offset * 4 + pos as u32,
-                1,
-                mx % 8,
-                my % 8,
-            );
-        }
-    }
 
     None
 }
@@ -510,7 +554,7 @@ fn sample_window_interior<S: AssetSource + ?Sized>(
     window: &Window,
     wx: usize,
     wy: usize,
-) -> [u8; 4] {
+) -> Option<[u8; 4]> {
     // The scroll shifts the whole pixel buffer up: content at
     // unscrolled row `r` shows at window row `r - scroll`, so the
     // row printed at `wy` is the content at `wy + scroll`.
@@ -541,7 +585,7 @@ fn sample_window_interior<S: AssetSource + ?Sized>(
                     if value != 0 {
                         // The blit's colorKey is 0: the indicator's
                         // own zero pixels stay transparent.
-                        return palette[bank + usize::from(value & 0xF)];
+                        return Some(palette[bank + usize::from(value & 0xF)]);
                     }
                 }
             }
@@ -583,11 +627,12 @@ fn sample_window_interior<S: AssetSource + ?Sized>(
             2 => glyph.color.shadow,
             _ => glyph.color.bg,
         } & 0xF; // the window buffer is 4bpp
-        return palette[bank + usize::from(index)];
+        return (index != 0).then(|| palette[bank + usize::from(index)]);
     }
 
     // The fill: FillWindowPixelBuffer's current value.
-    palette[bank + usize::from(window.fill & 0xF)]
+    let index = window.fill & 0xF;
+    (index != 0).then(|| palette[bank + usize::from(index)])
 }
 
 /// Samples one 4bpp tile of the owning layer's char block at
