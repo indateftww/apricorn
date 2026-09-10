@@ -46,12 +46,9 @@
 //! bits 0–10, height in bits 11–21, unknown bits 22–30 — always zero,
 //! bit 31 always set). Width and height must equal `8 << exp`.
 //!
-//! Two deliberate non-validations, both pinned empirically: the 4x4
-//! info's data pointers are garbage on every retail file, and in 45 of
-//! 1,157 files the last texture entry's declared span overruns the
-//! texture data by up to 1 KiB (dummy shadow textures; the file carries
-//! only the zero-filled prefix). Texture *offsets* are validated, span
-//! ends are not.
+//! The unused 4x4 info pointers are garbage on retail and are ignored.
+//! Texture spans are bounds-checked using their actual bit depth; PLTT4
+//! is four colors at two bits per pixel, not four bits per pixel.
 //!
 //! [`NNSG3dResDict`]: crate::formats::btx
 //!
@@ -70,7 +67,7 @@ use crate::nds::{NdsError, u16le, u32le};
 pub enum TexFmt {
     /// 3-bit alpha, 5-bit index, 8 bpp (`GX_TEXFMT_A3I5`, raw 1).
     A3i5,
-    /// 4-color indexed, 4 bpp (`GX_TEXFMT_PLTT4`, raw 2).
+    /// 4-color indexed, 2 bpp (`GX_TEXFMT_PLTT4`, raw 2).
     Pltt4,
     /// 16-color indexed, 4 bpp (`GX_TEXFMT_PLTT16`, raw 3).
     Pltt16,
@@ -111,11 +108,12 @@ impl TexFmt {
         }
     }
 
-    /// Bits per pixel: 4 or 8.
+    /// Bits per pixel: 2, 4 or 8.
     #[must_use]
     pub fn bpp(self) -> u8 {
         match self {
-            Self::Pltt4 | Self::Pltt16 => 4,
+            Self::Pltt4 => 2,
+            Self::Pltt16 => 4,
             Self::A3i5 | Self::Pltt256 | Self::A5i3 => 8,
         }
     }
@@ -123,8 +121,7 @@ impl TexFmt {
 
 /// One texture dictionary entry.
 ///
-/// `data` is clamped to the texture-data area (see the module docs on
-/// the 45 retail files whose declared span overruns it).
+/// `data` contains exactly the declared span inside the texture-data area.
 #[derive(Debug)]
 pub struct BtxTexture<'a> {
     name: &'a str,
@@ -153,9 +150,7 @@ impl BtxTexture<'_> {
         self.offset
     }
 
-    /// The declared data size, `width * height * bpp / 8`. Retail files
-    /// may carry less data than declared (see the module docs); use
-    /// [`data`](Self::data) for the actual bytes.
+    /// The data size, `width * height * bpp / 8`.
     #[must_use]
     pub fn declared_size(&self) -> usize {
         self.declared_size
@@ -186,8 +181,7 @@ impl BtxTexture<'_> {
         self.color0_transparent
     }
 
-    /// The image data — the declared span, clamped to the end of the
-    /// texture-data area.
+    /// The image data, exactly the declared span within the texture-data area.
     #[must_use]
     pub fn data(&self) -> &[u8] {
         self.data
@@ -617,7 +611,12 @@ impl<'a> Btx<'a> {
             }
             min_offset = min_offset.min(offset);
             let declared_size = width as usize * height as usize * usize::from(fmt.bpp()) / 8;
-            let end = (offset + declared_size).min(tex_data.len());
+            let end = offset + declared_size;
+            if end > tex_data.len() {
+                return Err(NdsError::Invalid {
+                    what: "texture span (outside the texture data)",
+                });
+            }
             textures.push(BtxTexture {
                 name,
                 offset,
@@ -1051,10 +1050,8 @@ mod tests {
     }
 
     #[test]
-    fn clamps_overrunning_texture_data() {
-        // Retail-style overrun: shrink the texture data (sizeTex and
-        // ofsPlttData) so entry 1's declared span pokes past its end.
-        // The parser must clamp the slice instead of rejecting the file.
+    fn rejects_overrunning_texture_data() {
+        // A malformed texture whose declared span exceeds its data area.
         let mut data = build_btx();
         let tex_bytes = 128 + 32; // only 32 of shadow's 64 bytes exist
         data[0x1C + 4..0x1C + 6].copy_from_slice(&((tex_bytes / 8) as u16).to_le_bytes());
@@ -1067,13 +1064,7 @@ mod tests {
         data[8..12].copy_from_slice(&(total as u32).to_le_bytes());
         data[0x14 + 4..0x14 + 8].copy_from_slice(&((total - 0x14) as u32).to_le_bytes());
 
-        let btx = Btx::parse(&data).expect("overrunning retail shape must parse");
-        let shadow = &btx.textures()[1];
-        assert_eq!(shadow.declared_size(), 64);
-        assert_eq!(shadow.data().len(), 32);
-        assert_eq!(btx.texture_data().len(), 160);
-
-        assert_eq!(btx.to_bytes(), data, "clamped file round-trips byte-exact");
+        assert!(Btx::parse(&data).is_err());
     }
 
     #[test]

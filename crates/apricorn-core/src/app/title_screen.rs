@@ -138,6 +138,7 @@ impl TitleScreen {
         // never load; BG3 is the cleared window. Engine B (SUB, the
         // top LCD): the three art layers.
         let main_layer = |char_base: u8, priority: u8| BgLayer {
+            hidden_rect: None,
             enabled: false,
             char_base,
             screen: None,
@@ -148,6 +149,7 @@ impl TitleScreen {
             priority,
         };
         let sub_layer = |char_base: u8, screen, color_mode: ColorMode, priority: u8| BgLayer {
+            hidden_rect: None,
             enabled: false,
             char_base,
             screen,

@@ -79,14 +79,22 @@ pub trait AssetSource {
     /// The font a window glyph prints from.
     fn font(&self, id: AssetId) -> Option<&Font>;
     /// Sprite geometry, if this source provides it.
-    fn cells(&self, _id: AssetId) -> Option<&cache::Cells> { None }
+    fn cells(&self, _id: AssetId) -> Option<&cache::Cells> {
+        None
+    }
     /// Sprite animations, if this source provides them.
-    fn animation(&self, _id: AssetId) -> Option<&cache::Animation> { None }
+    fn animation(&self, _id: AssetId) -> Option<&cache::Animation> {
+        None
+    }
 }
 
 impl AssetSource for AssetStore {
-    fn cells(&self, id: AssetId) -> Option<&cache::Cells> { AssetStore::cells(self, id) }
-    fn animation(&self, id: AssetId) -> Option<&cache::Animation> { AssetStore::animation(self, id) }
+    fn cells(&self, id: AssetId) -> Option<&cache::Cells> {
+        AssetStore::cells(self, id)
+    }
+    fn animation(&self, id: AssetId) -> Option<&cache::Animation> {
+        AssetStore::animation(self, id)
+    }
     fn tiles(&self, id: AssetId) -> Option<&cache::Tiles> {
         AssetStore::tiles(self, id)
     }
@@ -178,9 +186,15 @@ fn render_engine<S: AssetSource + ?Sized>(engine: &EngineFrame, store: &S) -> Sc
     let objects = crate::sprites::rasterize(engine, store);
 
     let mut out = ScreenBuffer::new();
+    if let Some(field) = &engine.field {
+        crate::field::render(field, &mut out.pixels);
+        apply_brightness(engine, &mut out);
+        return out;
+    }
     for y in 0..ScreenBuffer::HEIGHT {
         for x in 0..ScreenBuffer::WIDTH {
-            let [r, g, b, _] = composite_pixel(engine, store, &palette, &order, objects[y * 256 + x], x, y);
+            let [r, g, b, _] =
+                composite_pixel(engine, store, &palette, &order, objects[y * 256 + x], x, y);
             out.pixels[out.index(x, y)] = [r, g, b, 255];
         }
     }
@@ -200,11 +214,7 @@ fn compose_palette<S: AssetSource + ?Sized>(engine: &EngineFrame, store: &S) -> 
             continue;
         };
         let start = usize::from(load.offset);
-        for (i, &color) in palette
-            .iter()
-            .take(usize::from(load.colors))
-            .enumerate()
-        {
+        for (i, &color) in palette.iter().take(usize::from(load.colors)).enumerate() {
             if let Some(slot) = ram.get_mut(start + i) {
                 *slot = color;
             }
@@ -235,7 +245,12 @@ fn composite_pixel<S: AssetSource + ?Sized>(
     let mut top: Option<([u8; 4], bool, u8)> = None;
     let mut second: Option<[u8; 4]> = None;
 
-    let object_slot = object.map(|obj| order.iter().position(|&i| engine.bgs[i].priority >= obj.priority).unwrap_or(4));
+    let object_slot = object.map(|obj| {
+        order
+            .iter()
+            .position(|&i| engine.bgs[i].priority >= obj.priority)
+            .unwrap_or(4)
+    });
     for slot in 0..4 + usize::from(object.is_some()) {
         let (color, bit, semi) = if object_slot == Some(slot) {
             let obj = object.expect("the inserted OBJ pixel");
@@ -243,8 +258,12 @@ fn composite_pixel<S: AssetSource + ?Sized>(
         } else {
             let i = order[slot - usize::from(object_slot.is_some_and(|at| at < slot))];
             let layer = &engine.bgs[i];
-            if !layer.enabled { continue; }
-            let Some(color) = sample_layer(engine, store, palette, i, layer, x, y) else { continue; };
+            if !layer.enabled {
+                continue;
+            }
+            let Some(color) = sample_layer(engine, store, palette, i, layer, x, y) else {
+                continue;
+            };
             (color, plane::BG0 << i, false)
         };
         if top.is_none() {
@@ -304,6 +323,15 @@ fn sample_layer<S: AssetSource + ?Sized>(
     y: usize,
 ) -> Option<[u8; 4]> {
     // The scrolled position, wrapped within the layer's map.
+    if let Some((left, top, right, bottom)) = layer.hidden_rect {
+        if x >= usize::from(left)
+            && x < usize::from(right)
+            && y >= usize::from(top)
+            && y < usize::from(bottom)
+        {
+            return None;
+        }
+    }
     let map_w = usize::from(layer.size.tiles_wide()) * 8;
     let map_h = usize::from(layer.size.tiles_tall()) * 8;
     let mx = (x + usize::from(layer.scroll_x)) % map_w;
@@ -314,8 +342,10 @@ fn sample_layer<S: AssetSource + ?Sized>(
     for window in engine.windows.iter().rev() {
         if window.bg as usize == layer_index {
             let (left, top, width, height) = window.rect_px();
-            if mx >= usize::from(left) && mx < usize::from(left + width)
-                && my >= usize::from(top) && my < usize::from(top + height)
+            if mx >= usize::from(left)
+                && mx < usize::from(left + width)
+                && my >= usize::from(top)
+                && my < usize::from(top + height)
             {
                 // Window tilemap entries replace this layer's old map, even
                 // when the resulting pixel is transparent to lower planes.
@@ -358,10 +388,22 @@ fn sample_layer<S: AssetSource + ?Sized>(
     // the screen chunk too (those read as entry 0 above).
     for edit in &engine.tilemap_edits {
         let (bg, left, top, width, height) = match *edit {
-            TilemapEdit::Palette { bg, left, top, width, height, .. }
-            | TilemapEdit::Fill { bg, left, top, width, height, .. } => {
-                (bg, left, top, width, height)
+            TilemapEdit::Palette {
+                bg,
+                left,
+                top,
+                width,
+                height,
+                ..
             }
+            | TilemapEdit::Fill {
+                bg,
+                left,
+                top,
+                width,
+                height,
+                ..
+            } => (bg, left, top, width, height),
         };
         if bg as usize != layer_index {
             continue;
@@ -376,7 +418,9 @@ fn sample_layer<S: AssetSource + ?Sized>(
             continue;
         }
         match *edit {
-            TilemapEdit::Palette { bank: edit_bank, .. } => bank = usize::from(edit_bank),
+            TilemapEdit::Palette {
+                bank: edit_bank, ..
+            } => bank = usize::from(edit_bank),
             TilemapEdit::Fill {
                 tile: edit_tile,
                 palette,
@@ -501,11 +545,30 @@ fn sample_window<S: AssetSource + ?Sized>(
         if frame.dialogue && (-2..=wide + 2).contains(&ctx) && (-1..=tall).contains(&cty) {
             // render_window.s sub_0200E6B4: six columns per row.
             // The interior column repeats across the window's width.
-            let column = if ctx < 0 { ctx + 2 } else if ctx >= wide { ctx - wide + 3 } else { 2 };
-            let row = if cty < 0 { 0 } else if cty == tall { 2 } else { 1 };
-            return sample_block_tile(store, palette, engine, window,
+            let column = if ctx < 0 {
+                ctx + 2
+            } else if ctx >= wide {
+                ctx - wide + 3
+            } else {
+                2
+            };
+            let row = if cty < 0 {
+                0
+            } else if cty == tall {
+                2
+            } else {
+                1
+            };
+            return sample_block_tile(
+                store,
+                palette,
+                engine,
+                window,
                 u32::from(frame.base_tile) + (row * 6 + column) as u32,
-                frame.palette, mx % 8, my % 8);
+                frame.palette,
+                mx % 8,
+                my % 8,
+            );
         }
         if !frame.dialogue && (-1..=wide).contains(&ctx) && (-1..=tall).contains(&cty) {
             let border = if ctx < 0 && cty < 0 {
@@ -541,7 +604,6 @@ fn sample_window<S: AssetSource + ?Sized>(
             );
         }
     }
-
 
     None
 }
@@ -605,10 +667,7 @@ fn sample_window_interior<S: AssetSource + ?Sized>(
         } else {
             usize::from(g.height)
         };
-        if wx < gx
-            || wx >= gx + usize::from(g.width)
-            || content_y < gy
-            || content_y >= gy + height
+        if wx < gx || wx >= gx + usize::from(g.width) || content_y < gy || content_y >= gy + height
         {
             continue;
         }
@@ -627,11 +686,28 @@ fn sample_window_interior<S: AssetSource + ?Sized>(
             2 => glyph.color.shadow,
             _ => glyph.color.bg,
         } & 0xF; // the window buffer is 4bpp
-        return (index != 0).then(|| palette[bank + usize::from(index)]);
+        // GLYPH_COPY_4BPP tests the *mapped palette index*, not the
+        // source level. In particular bgColor=0 preserves the window's
+        // checkerboard beneath a glyph; it must not punch through the BG.
+        if index != 0 {
+            return Some(palette[bank + usize::from(index)]);
+        }
     }
 
     // The fill: FillWindowPixelBuffer's current value.
-    let index = window.fill & 0xF;
+    let index = window
+        .fills
+        .iter()
+        .rev()
+        .find_map(|&(x, y, w, h, color)| {
+            (wx >= usize::from(x)
+                && wx < usize::from(x) + usize::from(w)
+                && content_y >= usize::from(y)
+                && content_y < usize::from(y) + usize::from(h))
+            .then_some(color)
+        })
+        .unwrap_or(window.fill)
+        & 0xF;
     (index != 0).then(|| palette[bank + usize::from(index)])
 }
 
@@ -688,7 +764,7 @@ fn alpha_blend(first: [u8; 4], second: [u8; 4], eva: u8, ebv: u8) -> [u8; 4] {
 /// The backdrop as RGBA8. The frame stores the raw `GX_RGB` BGR555
 /// value (r bits 0–4, g 5–9, b 10–14); the expansion is the SDK's
 /// exact `v << 3 | v >> 2`.
-fn backdrop_rgba(color: u16) -> [u8; 4] {
+pub(crate) fn backdrop_rgba(color: u16) -> [u8; 4] {
     let expand = |v: u16| (v << 3 | v >> 2) as u8;
     [
         expand(color & 0x1F),

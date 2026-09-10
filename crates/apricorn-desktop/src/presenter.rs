@@ -79,6 +79,32 @@ struct Quad {
     size: [f32; 2],
 }
 
+/// Maps a physical window position to the bottom LCD using the same integer
+/// scale and letterbox origin as the presenter. Bars and the top LCD miss.
+pub fn touch_for_window(
+    width: u32,
+    height: u32,
+    x: f64,
+    y: f64,
+) -> Option<apricorn_core::input::Touch> {
+    let scale = (width / 256).min(height / 384).max(1);
+    let left = width.saturating_sub(256 * scale) / 2;
+    let top = height.saturating_sub(384 * scale) / 2 + 192 * scale;
+    if x < f64::from(left)
+        || y < f64::from(top)
+        || x >= f64::from(left + 256 * scale)
+        || y >= f64::from(top + 192 * scale)
+        || x >= f64::from(width)
+        || y >= f64::from(height)
+    {
+        return None;
+    }
+    Some(apricorn_core::input::Touch {
+        x: ((x - f64::from(left)) / f64::from(scale)) as u16,
+        y: ((y - f64::from(top)) / f64::from(scale)) as u16,
+    })
+}
+
 impl Quad {
     /// The stacked-screens layout for a window of `width`×`height`
     /// pixels: the largest integer scale fitting both screens, then
@@ -414,6 +440,27 @@ impl Presenter {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stylus_mapping_matches_integer_letterboxing() {
+        use super::touch_for_window;
+        use apricorn_core::input::Touch;
+        assert_eq!(
+            touch_for_window(512, 768, 58.0, 562.0),
+            Some(Touch { x: 29, y: 89 })
+        );
+        assert_eq!(touch_for_window(512, 768, 20.0, 383.0), None);
+        assert_eq!(
+            touch_for_window(900, 800, 194.0, 400.0),
+            Some(Touch { x: 0, y: 0 })
+        );
+        assert_eq!(touch_for_window(900, 800, 193.0, 400.0), None);
+        assert_eq!(touch_for_window(900, 800, 706.0, 400.0), None);
+        assert_eq!(
+            touch_for_window(100, 200, 99.0, 199.0),
+            Some(Touch { x: 99, y: 7 })
+        );
+        assert_eq!(touch_for_window(100, 200, 100.0, 199.0), None);
+    }
     use super::Quad;
 
     /// An exact 2× fit (512×768 window): both screens at scale 2, no

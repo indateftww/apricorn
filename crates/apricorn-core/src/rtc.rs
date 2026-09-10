@@ -28,11 +28,11 @@
 ///
 /// // The frozen clock the desktop pins: HG's US release date, noon.
 /// let rtc = RtcDateTime::new(2010, 3, 14, 0, 12, 0, 0);
-/// assert_eq!(rtc.rng_seed(0), 2010 + 0x2A00_0000 + 12 * 0x1_0000);
+/// assert_eq!(rtc.rng_seed(0), 10 + 0x2A00_0000 + 12 * 0x1_0000);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RtcDateTime {
-    /// `RTCDate::year` — full years, e.g. `2010`.
+    /// Calendar year, e.g. `2010`; SDK reads use years since 2000.
     pub year: u32,
     /// `RTCDate::month` — 1–12.
     pub month: u32,
@@ -92,7 +92,7 @@ impl RtcDateTime {
     /// read.
     #[must_use]
     pub fn rng_seed(&self, vblank_counter: u32) -> u32 {
-        self.year
+        (self.year % 100)
             .wrapping_add(
                 self.month
                     .wrapping_mul(0x100)
@@ -100,7 +100,11 @@ impl RtcDateTime {
                     .wrapping_mul(0x1_0000),
             )
             .wrapping_add(self.hour.wrapping_mul(0x1_0000))
-            .wrapping_add(self.minute.wrapping_add(self.second).wrapping_mul(0x100_0000))
+            .wrapping_add(
+                self.minute
+                    .wrapping_add(self.second)
+                    .wrapping_mul(0x100_0000),
+            )
             .wrapping_add(vblank_counter)
     }
 }
@@ -112,7 +116,7 @@ mod tests {
     #[test]
     fn seed_matches_the_macro_term_by_term() {
         // Hand-evaluated from the C, term by term:
-        //   year 2010                       = 0x7DA
+        //   SDK year 10                     = 0x00A
         // + month * 0x100 * day * 0x10000   = 3 * 0x100 * 14 * 0x10000
         //   = 10752 * 0x10000               = 0x2A00_0000
         // + hour * 0x10000                  = 0xC_0000
@@ -124,7 +128,7 @@ mod tests {
             .wrapping_mul(14)
             .wrapping_mul(0x1_0000);
         assert_eq!(month_term, 0x2A00_0000);
-        let expected = 0x2A0C_07DA_u32;
+        let expected = 0x2A0C_000A_u32;
         assert_eq!(rtc.rng_seed(0), expected);
 
         // The vblank counter lands last, plain wrapping addition.
@@ -138,11 +142,11 @@ mod tests {
         // 0x1_7400_0000, which wraps to 0x7400_0000 (the minute term
         // tops out at (59 + 59) * 0x1000000 = 0x7600_0000, in range).
         let rtc = RtcDateTime::new(2000, 12, 31, 0, 23, 59, 59);
-        // year 0x7D0 + month 0x7400_0000 + hour 0x17_0000
+        // SDK year 0 + month 0x7400_0000 + hour 0x17_0000
         // + minute 0x7600_0000
-        assert_eq!(rtc.rng_seed(0), 0xEA17_07D0);
+        assert_eq!(rtc.rng_seed(0), 0xEA17_0000);
         // The vblank counter wraps with the whole sum, not saturating.
-        assert_eq!(rtc.rng_seed(u32::MAX), 0xEA17_07CF);
+        assert_eq!(rtc.rng_seed(u32::MAX), 0xEA16_FFFF);
     }
 
     #[test]

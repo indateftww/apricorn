@@ -191,8 +191,9 @@ pins the same pixels by SHA-1 (details: `docs/gfx.md`).
       round-trip + status-matrix tests on synthesized retail-shaped
       blobs plus a retail `hg.sav` gate (`tests/save.rs`),
       `docs/save.md`
-- [ ] Game-state machine: boot → title → new game → Oak intro → name entry.
-      One commit at the end; the port order, one scene at a time:
+- [x] Game-state machine: boot → title → new game → Oak intro → name entry.
+      Functional milestone accepted after user regression testing on
+      2026-09-11. Exact parity follow-ups are tracked in Phase 8.
       - [x] Pinned RTC clock (`GF_InitRTCWork` — the deterministic
             time Oak's greeting and `InitializeMainRNG` read).
             → `apricorn-core::rtc`
@@ -216,15 +217,38 @@ pins the same pixels by SHA-1 (details: `docs/gfx.md`).
             menu, control/adventure info screens, the time-of-day
             greeting, the Oak-pic slide, the gender pick, the naming
             handoff, the shrink anim. → `apricorn-core::app::oak_speech`
-      - [ ] Naming screen (`src/naming_screen.c`): the on-screen
+      - [x] Naming screen (`src/naming_screen.c`): the on-screen
             keyboard name entry Oak launches (nested overlay).
-            → `apricorn-core::app::naming`
-      - [ ] Landing: desktop presenter wired from `boot_chain` to
-            `Game`, docs page, machine-walk tests re-pinned through
-            Oak/naming, this checkbox pass, the step's single commit.
+            → `apricorn-core::app::naming`: ROM-loaded uppercase/lowercase/
+            symbol pages, pad/touch input, deletion and seven-character
+            limit, page slides, default-name RNG selection; confirmed
+            identity retained by `Game`. `tests/naming_hg.rs` in core/gfx.
+      - [x] Landing: desktop runs `Game` with mouse-to-stylus input,
+            `docs/game-flow.md`, machine-walk tests through real Oak/name
+            entry (no injected result), and renderer regressions for OBJ
+            palettes, transparent text blits and the name-box window mask.
+      - [x] Naming's palette glow, bar wiggle and BACK/OK press effects;
+            ROM animation/palette data with behavior regressions.
+      - [x] Structured new-game and post-Oak save initialization:
+            all 42 block defaults, money/position/flags, trainer ID/avatar,
+            Safari areas, friend mail and Pokewalker seeds. Defaults are
+            checked against original ARM initializers under fixed external
+            inputs; post-Oak RNG order and card round trips are tested.
+            → `save::new_game`, core/harness `tests/new_game_hg.rs`.
+      - [x] Rendered bedroom landing: map 64's real land model, eight
+            furniture placements, textures and the chosen player character.
+            → `core::field`, `gfx::field`, `tests/bedroom_hg.rs`.
+      - [x] User regression playtest and Phase 4 acceptance before commit.
+            Oak's missing Poké Ball corrected and its render verified;
+            save validation covered by automated tests.
 
 **Exit:** new-game flow up to landing in the player's bedroom; original `.sav`
 files load and save back byte-identically.
+— Flow initializes the new save state and reaches a rendered static bedroom
+with the confirmed name/gender. Movement, room scripts and field menus are
+Phase 5. Phase 4's functional milestone is accepted; this is not a claim of
+full original-scene equivalence. Retail save-container round trips pass,
+and exact parity follow-ups remain explicit in Phase 8.
 
 ---
 
@@ -279,6 +303,10 @@ Phases 5–6.
 ---
 
 ## Phase 8 — Fidelity hardening & completion
+
+- [ ] Phase 4 parity follow-ups: original-ROM frame/state comparisons for
+      Oak/naming, including nested overlay/fade timing, outstanding Oak
+      sprite waits/yes-no cursor, and post-Oak whole-region comparison.
 
 - [ ] Long-play regression: extended replay scripts covering gyms, rival
       battles, legendaries, Kanto access, Elite 4 → credits.

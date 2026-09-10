@@ -15,6 +15,7 @@
 
 #![deny(missing_docs)]
 
+mod field;
 pub mod raster;
 mod sprites;
 

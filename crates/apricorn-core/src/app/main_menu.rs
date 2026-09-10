@@ -57,14 +57,14 @@
 use std::sync::Mutex;
 
 use crate::app::fade::{BrightnessFade, FadeColor, FadeType};
-use crate::app::text::{TextFlags, TextPrinter, TEXT_SPEED_NOTRANSFER};
+use crate::app::text::{TEXT_SPEED_NOTRANSFER, TextFlags, TextPrinter};
 use crate::app::{App, ChainNext};
 use crate::assets::{AssetStore, AssetsError, font_narc, frame_narc, msg_narc};
+use crate::font::Font;
 use crate::frame::{
     AssetId, BgLayer, ColorMode, DisplaySelect, LogicalFrame, PaletteLoad, ScreenSize, TextColor,
     TilePlacement, Window, WindowFrame,
 };
-use crate::font::Font;
 use crate::input::{Input, Keys, Touch, key};
 use crate::text::string::GameString;
 
@@ -640,6 +640,7 @@ impl MainMenu {
         self.frame.display = DisplaySelect::SubOnTop;
         // MAIN_0: 256x512, screen 0xF000, char 0x0, priority 2.
         self.frame.main.bgs[MAIN_0] = BgLayer {
+            hidden_rect: None,
             enabled: true,
             char_base: MAIN0_BLOCK as u8,
             screen: None,
@@ -651,6 +652,7 @@ impl MainMenu {
         };
         // MAIN_1: 256x256, screen 0xD800, char 0x8000, priority 1.
         self.frame.main.bgs[MAIN_1] = BgLayer {
+            hidden_rect: None,
             enabled: true,
             char_base: MAIN1_BLOCK as u8,
             screen: None,
@@ -663,6 +665,7 @@ impl MainMenu {
         // MAIN_2: 256x512, screen 0xE000, char 0x0, priority 0 —
         // MAIN_0's char block again.
         self.frame.main.bgs[MAIN_2] = BgLayer {
+            hidden_rect: None,
             enabled: true,
             char_base: MAIN2_BLOCK as u8,
             screen: None,
@@ -748,12 +751,11 @@ impl MainMenu {
                         None => self.push_button_window(y, button.height, base_tile),
                     };
                     self.print_button_label(index, button.msg, input);
-                    self.frame.main.windows[index].frame =
-                        Some(WindowFrame {
-                            base_tile: FRAME0_TILE,
-                            palette: 2,
-                            dialogue: false,
-                        });
+                    self.frame.main.windows[index].frame = Some(WindowFrame {
+                        base_tile: FRAME0_TILE,
+                        palette: 2,
+                        dialogue: false,
+                    });
                     self.slot_windows[slot] = Some(index);
                     y += button.height + 2;
                 }
@@ -807,6 +809,7 @@ impl MainMenu {
             base_tile,
             fill: WINDOW_FILL,
             glyphs: Vec::new(),
+            fills: Vec::new(),
             scroll: 0,
             frame: None,
             arrow: None,
@@ -873,7 +876,14 @@ impl MainMenu {
 
     /// The dialog bank's print — the same builder trio over a
     /// dialog window, at the builder's `textX`/`textY`.
-    fn print_dialog_message(&mut self, index: usize, msg: usize, text_x: u16, text_y: u16, input: Input) {
+    fn print_dialog_message(
+        &mut self,
+        index: usize,
+        msg: usize,
+        text_x: u16,
+        text_y: u16,
+        input: Input,
+    ) {
         let msg_index = msg - DIALOG_MSG_IDS[0];
         let units = self.dialog_messages[msg_index].clone();
         let mut printer = TextPrinter::new(
@@ -1023,9 +1033,7 @@ impl MainMenu {
     /// buttons when the target is the top (the 384 target's
     /// tilemap wipe is unreachable with five buttons, and deferred).
     fn scroll_to(&mut self, slot: usize, input: Input) {
-        let index = self
-            .slot_windows[slot]
-            .expect("the scroll target is an in-use slot");
+        let index = self.slot_windows[slot].expect("the scroll target is an in-use slot");
         let option_y = (i32::from(self.frame.main.windows[index].top) - 1) * 8;
         let screen_y = self.effective_screen_y / FX32_ONE;
         if screen_y <= option_y && screen_y + SCREEN_HEIGHT > option_y {
@@ -1071,14 +1079,8 @@ impl MainMenu {
 
     /// `MainMenu_HandleKeyInput` (`:272`).
     fn handle_key_input(&mut self, input: Input, new_keys: Keys) {
-        const TRANSITION: u16 = key::Y
-            | key::X
-            | key::UP
-            | key::DOWN
-            | key::LEFT
-            | key::RIGHT
-            | key::B
-            | key::A;
+        const TRANSITION: u16 =
+            key::Y | key::X | key::UP | key::DOWN | key::LEFT | key::RIGHT | key::B | key::A;
         // The touch→buttons transition (:275-279) — the input mode
         // is only Touch when the dialog left it so.
         if new_keys.any(TRANSITION) && self.input_mode == InputMode::Touch {
@@ -1209,9 +1211,7 @@ impl MainMenu {
                 // The frameless warning window, its text centered
                 // over the 32-tile row (:673-679).
                 let warning_text = self.dialog_messages[0].clone();
-                let text_width = self
-                    .font
-                    .multiline_width(warning_text.units(), 0);
+                let text_width = self.font.multiline_width(warning_text.units(), 0);
                 let text_x = (i32::from(WARNING_WIDTH) * 8 - text_width as i32) / 2;
                 let dialog_base = self.frame.main.windows.len();
                 self.frame.main.windows.push(Window {
@@ -1224,6 +1224,7 @@ impl MainMenu {
                     base_tile: WARNING_BASE_TILE,
                     fill: WINDOW_FILL,
                     glyphs: Vec::new(),
+                    fills: Vec::new(),
                     scroll: 0,
                     frame: None,
                     arrow: None,
@@ -1251,6 +1252,7 @@ impl MainMenu {
                         base_tile: OPTION_BASE_TILES[i],
                         fill: WINDOW_FILL,
                         glyphs: Vec::new(),
+                        fills: Vec::new(),
                         scroll: 0,
                         frame: None,
                         arrow: None,
@@ -1293,10 +1295,7 @@ impl MainMenu {
                     let input_result = self.new_game_handle_input(input, new_keys, touch_new);
                     // AdvanceButtonBorderAnimation — deferred.
                     if input_result & 3 != 0 {
-                        let base = self
-                            .dialog_base
-                            .take()
-                            .expect("the open dialog's windows");
+                        let base = self.dialog_base.take().expect("the open dialog's windows");
                         self.frame.main.windows.truncate(base);
                         self.redraw_focus(self.current_option as i32);
                         self.dialog_state = DialogState::Restore;
@@ -1327,14 +1326,8 @@ impl MainMenu {
         if new_keys == Keys::IDLE {
             return 0;
         }
-        const TRANSITION: u16 = key::Y
-            | key::X
-            | key::UP
-            | key::DOWN
-            | key::LEFT
-            | key::RIGHT
-            | key::B
-            | key::A;
+        const TRANSITION: u16 =
+            key::Y | key::X | key::UP | key::DOWN | key::LEFT | key::RIGHT | key::B | key::A;
         if new_keys.any(TRANSITION) && self.input_mode == InputMode::Touch {
             self.input_mode = InputMode::Buttons;
             self.redraw_dialog_focus(self.current_new_game_option as i32);
@@ -1455,10 +1448,7 @@ impl App for MainMenu {
                         } else {
                             // Begin adventure — the exit fade
                             // (:1461-1463).
-                            self.begin_exit_fade(
-                                FadeType::BrightnessOut,
-                                MenuState::Free,
-                            );
+                            self.begin_exit_fade(FadeType::BrightnessOut, MenuState::Free);
                         }
                     }
                 }

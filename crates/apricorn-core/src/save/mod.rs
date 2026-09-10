@@ -40,6 +40,7 @@
 
 mod crc;
 mod layout;
+pub mod new_game;
 
 pub use crc::crc16;
 pub use layout::{
@@ -419,6 +420,26 @@ pub struct SaveData {
 }
 
 impl SaveData {
+    /// Seals a newly initialized RAM region into two valid card mirrors.
+    /// Used by the new-game snapshot API; it never touches a card on disk.
+    pub(crate) fn from_new_region(region: &[u8]) -> Self {
+        assert_eq!(region.len(), DYNAMIC_REGION_SIZE);
+        let mut result = Self {
+            blob: vec![0xff; CARD_BACKUP_SIZE],
+            counter: 0,
+            last_good_sector: 0,
+            slot_degraded: false,
+        };
+        result.blob[..DYNAMIC_REGION_SIZE].copy_from_slice(region);
+        for id in 0..SAVE_BLOCK_NUM {
+            result.update_block_crc(id);
+        }
+        // save_game seals the destination; doing both mirrors gives the
+        // same crash-safe container invariants as an existing card.
+        result.save_game();
+        result.save_game();
+        result
+    }
     /// `SaveData_New`'s load path: probe both slot mirrors like the
     /// boot code and keep the newest loadable generation.
     ///

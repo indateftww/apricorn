@@ -148,6 +148,9 @@ pub struct BgLayer {
     /// Draw priority 0–3 (`BGxCNT` bits 0–1): lower draws on top;
     /// ties go to the lower-numbered BG.
     pub priority: u8,
+    /// Screen-space rectangle where the hardware window hides this BG,
+    /// `(left, top, right, bottom)` with exclusive right/bottom edges.
+    pub hidden_rect: Option<(u16, u16, u16, u16)>,
 }
 
 impl Default for BgLayer {
@@ -161,6 +164,7 @@ impl Default for BgLayer {
             scroll_x: 0,
             scroll_y: 0,
             priority: 0,
+            hidden_rect: None,
         }
     }
 }
@@ -334,6 +338,9 @@ pub struct Window {
     /// The fill color index — `FillWindowPixelBuffer`'s current
     /// value, the window's background.
     pub fill: u8,
+    /// Rectangle fills applied over the background and before glyphs, in
+    /// window content pixels: `(x, y, width, height, palette_index)`.
+    pub fills: Vec<(u16, u16, u16, u16, u8)>,
     /// The glyphs printed so far, in print order (later glyphs draw
     /// over earlier ones, as blits do).
     pub glyphs: Vec<WindowGlyph>,
@@ -374,6 +381,7 @@ impl Default for Window {
             palette: 0,
             base_tile: 0,
             fill: 0,
+            fills: Vec::new(),
             glyphs: Vec::new(),
             scroll: 0,
             frame: None,
@@ -534,7 +542,8 @@ pub struct Sprite {
     pub y: i16,
     /// Hardware OBJ priority relative to BG layers (0 is foremost).
     pub priority: u8,
-    /// Palette bank within the sprite's loaded palette.
+    /// Base palette bank within the sprite's loaded palette. Each OAM
+    /// entry's bank is added to this placement offset.
     pub palette_bank: u8,
 }
 
@@ -543,6 +552,8 @@ pub struct Sprite {
 /// palette RAM, and the message windows printing into the layers.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct EngineFrame {
+    /// The static 3D field layer, when this engine displays a field map.
+    pub field: Option<std::sync::Arc<crate::field::FieldScene>>,
     /// The engine's four BG layers, BG0 through BG3. Engine A's BG0
     /// doubles as the 3D core's framebuffer when bound to a model
     /// (`GX_BG0_AS_3D`) — Phase 3 renders it absent (transparent),
@@ -565,6 +576,8 @@ pub struct EngineFrame {
     /// loads. Scenes replace entries in place and clear affected entries
     /// when reloading that palette range.
     pub palette_overrides: Vec<(u16, u16)>,
+    /// Live OBJ palette words (absolute color index, BGR555).
+    pub obj_palette_overrides: Vec<(u16, u16)>,
     /// The message windows on this engine's layers.
     pub windows: Vec<Window>,
     /// Visible sprites in OAM order (earlier wins a sprite overlap).
@@ -687,6 +700,7 @@ mod tests {
             palette: 12,
             base_tile: 0x36D,
             fill: 0xF,
+            fills: Vec::new(),
             glyphs: vec![
                 WindowGlyph {
                     font: AssetId::FIRST,
@@ -738,7 +752,8 @@ mod tests {
             ..focus
         };
         assert_eq!(
-            scrolled.scroll - focus.scroll, 16,
+            scrolled.scroll - focus.scroll,
+            16,
             "the scroll delta is the blit's shift"
         );
     }

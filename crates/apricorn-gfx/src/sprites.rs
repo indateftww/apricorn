@@ -136,11 +136,17 @@ pub(crate) fn rasterize<S: AssetSource + ?Sized>(
                         continue;
                     }
                     let bank = if tiles.is_4bpp() {
-                        usize::from(sprite.palette_bank) * 16
+                        usize::from((sprite.palette_bank + oam.palette) & 15) * 16
                     } else {
                         0
                     };
                     if let Some(&color) = palette.get(bank + usize::from(value)) {
+                        let color = engine
+                            .obj_palette_overrides
+                            .iter()
+                            .rev()
+                            .find(|&&(index, _)| usize::from(index) == bank + usize::from(value))
+                            .map_or(color, |&(_, rgb)| crate::raster::backdrop_rgba(rgb));
                         pixels[at] = Some(Pixel {
                             color,
                             priority: sprite.priority,

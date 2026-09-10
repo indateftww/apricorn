@@ -200,7 +200,7 @@ impl Cpu {
             0b001 => self.exec_arm_data_proc(word, pc, arm_imm12(word), None),
             0b010 => self.exec_arm_single(word, pc, word & 0xFFF),
             0b011 => {
-                if word & 0x10 == 0 {
+                if word & 0x10 != 0 {
                     return Err(RunnerError::Unsupported {
                         addr: pc,
                         enc: word,
@@ -208,8 +208,7 @@ impl Cpu {
                 }
                 let rm = word & 0xF;
                 let shift = Shift::from_bits(word >> 5 & 3);
-                let rs = word >> 8 & 0xF;
-                let amount = self.regs[rs as usize];
+                let amount = word >> 7 & 0x1F;
                 self.exec_arm_single(
                     word,
                     pc,
@@ -302,8 +301,8 @@ impl Cpu {
             });
         }
         // Multiply family (bits 27-23 zero, bits 7-4 = 1001).
-        if word & 0x0F == 0b1001 {
-            if word >> 23 & 0x1F == 0 {
+        if (word >> 4) & 0x0F == 0b1001 {
+            if word & 0x0F00_0000 == 0 {
                 return self.exec_arm_multiply(word, pc);
             }
             // SWP and friends: not implemented, loudly.
@@ -334,76 +333,37 @@ impl Cpu {
 
     /// ARM multiply family: MUL/MLA/UMULL/UMLAL/SMULL/SMLAL.
     fn exec_arm_multiply(&mut self, word: u32, pc: u32) -> Result<(), RunnerError> {
-        let rd = word >> 16 & 0xF;
-        let rn = word >> 12 & 0xF;
-        let rs = word >> 8 & 0xF;
-        let rm = word & 0xF;
-        let m = self.reg_operand(rm as usize, pc) as i64;
-        let s = self.reg_operand(rs as usize, pc) as i64;
-        let set_flags = word & 0x0008_0000 != 0; // S bit
-        let (result, lo, hi) = match word >> 21 & 3 {
-            0b00 => {
-                // MUL / MLA
-                let acc = if word & 0x0020_0000 != 0 {
-                    self.reg_operand(rn as usize, pc) as i64
-                } else {
-                    0
-                };
-                let r = (m * s + acc) as u64 as u32;
-                (r, r, 0)
+        let hi = (word >> 16 & 15) as usize;
+        let lo = (word >> 12 & 15) as usize;
+        let a = self.reg_operand((word & 15) as usize, pc);
+        let b = self.reg_operand((word >> 8 & 15) as usize, pc);
+        let accumulate = word & (1 << 21) != 0;
+        let set_flags = word & (1 << 20) != 0;
+        if word & (1 << 23) == 0 {
+            let mut result = a.wrapping_mul(b);
+            if accumulate {
+                result = result.wrapping_add(self.reg_operand(lo, pc));
             }
-            0b10 => {
-                // UMULL / UMLAL
-                let (m, s) = (m as u64, s as u64);
-                let r = m * s;
-                let lo = r as u32;
-                let hi = (r >> 32) as u32;
-                let (lo, hi) = if word & 0x0020_0000 != 0 {
-                    let (a_lo, a_hi) = (
-                        self.reg_operand(rd as usize, pc),
-                        self.reg_operand(rn as usize, pc),
-                    );
-                    let (lo, c) = lo.overflowing_add(a_lo);
-                    let hi = hi.wrapping_add(a_hi).wrapping_add(u32::from(c));
-                    (lo, hi)
-                } else {
-                    (lo, hi)
-                };
-                (lo, lo, hi)
+            self.regs[hi] = result;
+            if set_flags {
+                self.set_nz(result);
             }
-            0b11 => {
-                // SMULL / SMLAL
-                let r = m * s;
-                let lo = r as u32;
-                let hi = (r >> 32) as u32;
-                let (lo, hi) = if word & 0x0020_0000 != 0 {
-                    let (a_lo, a_hi) = (
-                        self.reg_operand(rd as usize, pc),
-                        self.reg_operand(rn as usize, pc),
-                    );
-                    let (lo, c) = lo.overflowing_add(a_lo);
-                    let hi = hi.wrapping_add(a_hi).wrapping_add(u32::from(c));
-                    (lo, hi)
-                } else {
-                    (lo, hi)
-                };
-                (lo, lo, hi)
+        } else {
+            let mut result = if word & (1 << 22) != 0 {
+                (a as i32 as i64).wrapping_mul(b as i32 as i64) as u64
+            } else {
+                (a as u64) * (b as u64)
+            };
+            if accumulate {
+                let addend = (self.regs[hi] as u64) << 32 | self.regs[lo] as u64;
+                result = result.wrapping_add(addend);
             }
-            _ => {
-                return Err(RunnerError::Unsupported {
-                    addr: pc,
-                    enc: word,
-                });
+            self.regs[lo] = result as u32;
+            self.regs[hi] = (result >> 32) as u32;
+            if set_flags {
+                self.flags.n = result >> 63 != 0;
+                self.flags.z = result == 0;
             }
-        };
-        let _ = result;
-        self.regs[rd as usize] = lo;
-        if word >> 23 & 1 != 0 {
-            // 64-bit forms write both halves.
-            self.regs[rn as usize] = hi;
-        }
-        if set_flags {
-            self.set_nz(result);
         }
         Ok(())
     }
@@ -1150,9 +1110,9 @@ impl Cpu {
             // BL suffix: stay Thumb (pc stays even; thumb bit says so).
             self.regs[15] = target;
             self.thumb = true;
-        } else if hw2 >> 11 == 0b11110 {
+        } else if hw2 >> 11 == 0b11101 {
             // BLX suffix: target word-aligned, enter ARM.
-            self.regs[15] = target & !1;
+            self.regs[15] = target & !3;
             self.thumb = false;
         } else {
             return Err(RunnerError::Unsupported {

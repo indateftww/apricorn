@@ -62,8 +62,8 @@ use crate::assets::{
 use crate::font::Font;
 use crate::frame::{
     AssetId, BgLayer, Blend, BlendEffect, ColorMode, DisplaySelect, EngineFrame, LogicalFrame,
-    PaletteLoad, ScreenSize, TextColor, TilePlacement, TilemapEdit,
-    Window, WindowFrame, Sprite, plane,
+    PaletteLoad, ScreenSize, Sprite, TextColor, TilePlacement, TilemapEdit, Window, WindowFrame,
+    plane,
 };
 use crate::input::{Input, Keys, Touch, key};
 use crate::rtc::RtcDateTime;
@@ -75,15 +75,13 @@ use crate::text::string::GameString;
 // table-index truncation and negative arithmetic shift. The u16 angle
 // wraps after long holds, so all even degrees (not just tens) are needed.
 const GENDER_BLINK_BRIGHTNESS: [i8; 180] = [
-    0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4,
-    5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7,
-    7, 7, 7, 7, 7, 8, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
-    6, 6, 6, 6, 6, 6, 5, 5, 5, 5, 5, 4, 4, 4, 4, 4, 3, 3, 3, 3,
-    2, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0, -1, -1, -1, -2, -2, -2, -2, -3, -3,
-    -3, -3, -4, -4, -4, -4, -5, -5, -5, -5, -6, -6, -6, -6, -6, -7, -7, -7, -7, -7,
-    -7, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8,
-    -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -7, -7, -7, -7, -7, -7, -6, -6, -6, -6,
-    -6, -5, -5, -5, -5, -5, -4, -4, -4, -4, -3, -3, -3, -2, -2, -2, -2, -1, -1, -1,
+    0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 7,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 8, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 6, 6, 6, 6,
+    6, 6, 5, 5, 5, 5, 5, 4, 4, 4, 4, 4, 3, 3, 3, 3, 2, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0, -1, -1, -1,
+    -2, -2, -2, -2, -3, -3, -3, -3, -4, -4, -4, -4, -5, -5, -5, -5, -6, -6, -6, -6, -6, -7, -7, -7,
+    -7, -7, -7, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8, -8,
+    -8, -8, -8, -8, -8, -8, -8, -8, -7, -7, -7, -7, -7, -7, -6, -6, -6, -6, -6, -5, -5, -5, -5, -5,
+    -4, -4, -4, -4, -3, -3, -3, -2, -2, -2, -2, -1, -1, -1,
 ];
 
 /// `NARC_msg_msg_0219_bin` — the speech bank (`msg_0219_00000`
@@ -610,14 +608,12 @@ impl MultichoiceMenu {
 /// rect containing the touch. The rects are half-open on right and
 /// bottom (the `main_menu` idiom).
 fn find_rect_at_touch(touch: &Touch, rects: &[(u16, u16, u16, u16)]) -> Option<usize> {
-    rects
-        .iter()
-        .position(|&(top, bottom, left, right)| {
-            u32::from(touch.x) >= u32::from(left)
-                && u32::from(touch.x) < u32::from(right)
-                && u32::from(touch.y) >= u32::from(top)
-                && u32::from(touch.y) < u32::from(bottom)
-        })
+    rects.iter().position(|&(top, bottom, left, right)| {
+        u32::from(touch.x) >= u32::from(left)
+            && u32::from(touch.x) < u32::from(right)
+            && u32::from(touch.y) >= u32::from(top)
+            && u32::from(touch.y) < u32::from(bottom)
+    })
 }
 
 /// `OakSpeech_GetTimeOfDayIntroMsg` (`oaks_speech.c:1477-1495`) —
@@ -884,6 +880,7 @@ fn add_window(
         base_tile,
         fill: 0,
         glyphs: Vec::new(),
+        fills: Vec::new(),
         scroll: 0,
         frame: None,
         arrow: None,
@@ -998,9 +995,12 @@ impl OakSpeech {
         let button_sub_char = store.load_tiles(narc, intro_narc::BUTTON_TUTORIAL_SUB_CHAR)?;
         let tutorial_main_pal = store.load_palette(narc, intro_narc::MAIN_PALETTE)?;
         let tutorial_sub_pal = store.load_palette(narc, intro_narc::SUB_PALETTE)?;
-        let [r, g, b, _] = store.palette(tutorial_sub_pal).expect("loaded palette").rgba()[12];
-        let gender_frame_color = u16::from(r >> 3)
-            | (u16::from(g >> 3) << 5) | (u16::from(b >> 3) << 10);
+        let [r, g, b, _] = store
+            .palette(tutorial_sub_pal)
+            .expect("loaded palette")
+            .rgba()[12];
+        let gender_frame_color =
+            u16::from(r >> 3) | (u16::from(g >> 3) << 5) | (u16::from(b >> 3) << 10);
         // Each member loads once — the tables below index the loads.
         let button_screens = [
             store.load_screen(narc, intro_narc::BUTTON_TUTORIAL_SCREENS[0])?,
@@ -1070,19 +1070,55 @@ impl OakSpeech {
         let player_cells = store.load_cells(narc, 55)?;
         let player_animation = store.load_animation(narc, 56)?;
         let make_sprite = |tiles, palette, cells, animation, x, y, priority| Sprite {
-            tiles, palette, cells, animation, x, y, priority,
-            sequence: 0, elapsed: 0, palette_bank: 0,
+            tiles,
+            palette,
+            cells,
+            animation,
+            x,
+            y,
+            priority,
+            sequence: 0,
+            elapsed: 0,
+            palette_bank: 0,
         };
         let gender_sprites = [
-            make_sprite(ethan_char, ethan_pal, player_cells, player_animation, 64, 104, 0),
-            make_sprite(lyra_char, lyra_pal, player_cells, player_animation, 192, 104, 0),
+            make_sprite(
+                ethan_char,
+                ethan_pal,
+                player_cells,
+                player_animation,
+                64,
+                104,
+                0,
+            ),
+            make_sprite(
+                lyra_char,
+                lyra_pal,
+                player_cells,
+                player_animation,
+                192,
+                104,
+                0,
+            ),
         ];
         let touch_sprite = make_sprite(
-            store.load_tiles(narc, 60)?, store.load_palette(narc, 59)?,
-            store.load_cells(narc, 61)?, store.load_animation(narc, 62)?, 256, 192, 1);
+            store.load_tiles(narc, 60)?,
+            store.load_palette(narc, 59)?,
+            store.load_cells(narc, 61)?,
+            store.load_animation(narc, 62)?,
+            256,
+            192,
+            1,
+        );
         let marill_sprite = make_sprite(
-            store.load_tiles(narc, 64)?, store.load_palette(narc, 63)?,
-            store.load_cells(narc, 65)?, store.load_animation(narc, 66)?, 160, 80, 0);
+            store.load_tiles(narc, 64)?,
+            store.load_palette(narc, 63)?,
+            store.load_cells(narc, 65)?,
+            store.load_animation(narc, 66)?,
+            160,
+            80,
+            0,
+        );
 
         // `memset(data, 0, …)`: the whole work zeroed, then the
         // fields Init sets on top (`oaks_speech.c:546-563`).
@@ -1225,6 +1261,11 @@ impl OakSpeech {
         self.naming_done = true;
     }
 
+    /// Whether the outer overlay manager is ready to run name entry.
+    pub fn naming_requested(&self) -> bool {
+        self.outer_state == OuterState::OverlayRun && !self.naming_done
+    }
+
     /// The engine frames by name — MAIN is engine A (`G2_*`), SUB is
     /// engine B (`G2S_*`).
     fn engine_mut(&mut self, main: bool) -> &mut EngineFrame {
@@ -1284,14 +1325,16 @@ impl OakSpeech {
     /// — `BgTilemapRectChangePalette` over the whole 32×24 map plus
     /// the commit.
     fn fill_bg_layer_with_palette(&mut self, main: bool, bg: u8, bank: u8) {
-        self.engine_mut(main).tilemap_edits.push(TilemapEdit::Palette {
-            bg,
-            bank,
-            left: 0,
-            top: 0,
-            width: 32,
-            height: 24,
-        });
+        self.engine_mut(main)
+            .tilemap_edits
+            .push(TilemapEdit::Palette {
+                bg,
+                bank,
+                left: 0,
+                top: 0,
+                width: 32,
+                height: 24,
+            });
     }
 
     /// `OakSpeech_WaitFrames` (`oaks_speech.c:921-929`) — the one
@@ -1407,6 +1450,7 @@ impl OakSpeech {
                 engine.palette_loads.clear();
                 engine.palette_overrides.clear();
                 engine.bgs[layer] = BgLayer {
+                    hidden_rect: None,
                     enabled: false,
                     char_base: char_base(layer as u8),
                     screen: None,
@@ -1507,7 +1551,10 @@ impl OakSpeech {
             offset: 0,
             colors: TUTORIAL_SUB_PAL_COLORS,
         });
-        self.frame.sub.palette_overrides.retain(|&(index, _)| index >= TUTORIAL_SUB_PAL_COLORS);
+        self.frame
+            .sub
+            .palette_overrides
+            .retain(|&(index, _)| index >= TUTORIAL_SUB_PAL_COLORS);
         // SetButtonTutorialScreenLayout(1) (:1179), the
         // DrawPic(NONE, NONE) nop (:1180), ov53_021E67C4(0) (:1181).
         self.set_button_tutorial_screen_layout(1);
@@ -1612,7 +1659,11 @@ impl OakSpeech {
         // :1238-1248 — the male arm scrolls SUB_0/SUB_2/SUB_1 right
         // by 0x88; the female arm resets them.
         if layout == 1 {
-            let scroll = if self.player_gender == 0 { GENDER_SCROLL_X } else { 0 };
+            let scroll = if self.player_gender == 0 {
+                GENDER_SCROLL_X
+            } else {
+                0
+            };
             self.frame.sub.bgs[0].scroll_x = scroll;
             self.frame.sub.bgs[2].scroll_x = scroll;
             self.frame.sub.bgs[1].scroll_x = scroll;
@@ -1979,8 +2030,7 @@ impl OakSpeech {
                 self.init_multichoice_menu_with_frame_flash(menu_id);
                 self.frame.sub.bgs[1].enabled = true;
                 self.menu.cursor_pos = hitbox as u8;
-                self.frame.sub.bgs[1].scroll_y =
-                    MULTICHOICE_CURSOR_Y[menu_id][hitbox];
+                self.frame.sub.bgs[1].scroll_y = MULTICHOICE_CURSOR_Y[menu_id][hitbox];
                 self.menu.press_delay = 1;
                 self.menu.flash_frames_per = 2;
             }
@@ -2041,17 +2091,28 @@ impl OakSpeech {
             self.gender_blink_angle = self.gender_blink_angle.wrapping_add(10);
             i16::from(value)
         };
-        self.frame.sub.palette_overrides.retain(|&(index, _)| !(12..16).contains(&index));
+        self.frame
+            .sub
+            .palette_overrides
+            .retain(|&(index, _)| !(12..16).contains(&index));
         for gender in 0..2 {
             let active = selected && gender == self.menu.cursor_pos;
             let mut fill = 0;
             for shift in [0, 5, 10] {
                 let channel = ((self.gender_frame_color >> shift) & 31) as i16;
-                fill |= ((channel + if active { brightness } else { 0 }).clamp(0, 31) as u16) << shift;
+                fill |=
+                    ((channel + if active { brightness } else { 0 }).clamp(0, 31) as u16) << shift;
             }
-            let outline = if active { 31 | (7 << 5) | (7 << 10) } else { 27 | (28 << 5) | (28 << 10) };
+            let outline = if active {
+                31 | (7 << 5) | (7 << 10)
+            } else {
+                27 | (28 << 5) | (28 << 10)
+            };
             let offset = 12 + u16::from(gender) * 2;
-            self.frame.sub.palette_overrides.extend([(offset, fill), (offset + 1, outline)]);
+            self.frame
+                .sub
+                .palette_overrides
+                .extend([(offset, fill), (offset + 1, outline)]);
         }
     }
 
@@ -2125,10 +2186,8 @@ impl OakSpeech {
             Some(asset) => {
                 // LoadCharData(MAIN_1, gfxId) (:1471) — the pic's own
                 // char block, tile 0.
-                self.frame.main.char_blocks[usize::from(char_base(1))].push(TilePlacement {
-                    asset,
-                    tile: 0,
-                });
+                self.frame.main.char_blocks[usize::from(char_base(1))]
+                    .push(TilePlacement { asset, tile: 0 });
                 false
             }
         }
@@ -2160,8 +2219,7 @@ impl OakSpeech {
                     self.oak_translate_pos = target;
                     self.oak_translate_state = 2;
                 }
-                self.frame.main.bgs[1].scroll_x =
-                    (self.oak_translate_pos as u16) & 0x1FF;
+                self.frame.main.bgs[1].scroll_x = (self.oak_translate_pos as u16) & 0x1FF;
                 false
             }
             _ => {
@@ -2433,8 +2491,13 @@ impl OakSpeech {
                 self.frame.main.bgs[0].enabled = true;
                 self.frame.sub.bgs[0].enabled = true;
                 self.frame.sub.bgs[3].enabled = true;
-                self.fade
-                    .begin_with_screens(FadeScreens::Both, FadeType::BrightnessIn, FadeColor::Black, 6, 1);
+                self.fade.begin_with_screens(
+                    FadeScreens::Both,
+                    FadeType::BrightnessIn,
+                    FadeColor::Black,
+                    6,
+                    1,
+                );
                 self.main_state = MainState::WaitFadeInTutorialMenu;
             }
             MainState::WaitFadeInTutorialMenu => {
@@ -2509,8 +2572,13 @@ impl OakSpeech {
                 self.touch_button_action(input, TOUCHTOADVANCE_SHOW);
                 self.frame.sub.bgs[0].enabled = true;
                 self.frame.sub.bgs[3].enabled = true;
-                self.fade
-                    .begin_with_screens(FadeScreens::Both, FadeType::BrightnessIn, FadeColor::Black, 6, 1);
+                self.fade.begin_with_screens(
+                    FadeScreens::Both,
+                    FadeType::BrightnessIn,
+                    FadeColor::Black,
+                    6,
+                    1,
+                );
                 self.main_state = MainState::WaitFadeInControlInfo;
             }
             MainState::WaitFadeInControlInfo => {
@@ -2659,8 +2727,13 @@ impl OakSpeech {
                 self.touch_button_action(input, TOUCHTOADVANCE_SHOW);
                 self.frame.sub.bgs[0].enabled = true;
                 self.frame.sub.bgs[3].enabled = true;
-                self.fade
-                    .begin_with_screens(FadeScreens::Both, FadeType::BrightnessIn, FadeColor::Black, 6, 1);
+                self.fade.begin_with_screens(
+                    FadeScreens::Both,
+                    FadeType::BrightnessIn,
+                    FadeColor::Black,
+                    6,
+                    1,
+                );
                 self.main_state = MainState::WaitFadeInAdventureInfo;
             }
             MainState::WaitFadeInAdventureInfo => {
@@ -2738,8 +2811,13 @@ impl OakSpeech {
                 self.frame.sub.bgs[0].enabled = true;
                 self.frame.sub.bgs[3].enabled = true;
                 self.main_state = MainState::WaitFadeInNoInfoNeeded;
-                self.fade
-                    .begin_with_screens(FadeScreens::Both, FadeType::BrightnessIn, FadeColor::Black, 6, 1);
+                self.fade.begin_with_screens(
+                    FadeScreens::Both,
+                    FadeType::BrightnessIn,
+                    FadeColor::Black,
+                    6,
+                    1,
+                );
             }
             MainState::WaitFadeInNoInfoNeeded => {
                 // :1789-1794 — the fade gate, the 40-frame hold, and
@@ -2795,12 +2873,13 @@ impl OakSpeech {
                 }
             }
             MainState::ThisWorldIsInhabited => {
-                // :1827-1833 — the dialog, then the Marill's ball
-                // drawn (the sprite, deferred).
+                // :1827-1833 — the dialog, then the Marill's ball.
                 if self.print_dialog_msg(input, new_keys, 34, 1) {
                     self.marill_sprite.sequence = 3;
                     self.marill_sprite.elapsed = 0;
-                    self.marill_sprite.palette_bank = 1;
+                    // The ball cell itself selects bank 1 within the
+                    // shared Marill palette. Do not add it a second time.
+                    self.marill_sprite.palette_bank = 0;
                     self.marill_visible = true;
                     self.main_state = MainState::BallOpeningFlash;
                 }
@@ -2837,8 +2916,7 @@ impl OakSpeech {
                 // immediate FALSE, so the ramp runs a call: 16 execs
                 // writing 15 down to 0.
                 self.pic_anim_step -= 1;
-                self.frame.main.blend =
-                    blend_brightness(plane::OBJ, self.pic_anim_step as i16);
+                self.frame.main.blend = blend_brightness(plane::OBJ, self.pic_anim_step as i16);
                 if self.pic_anim_step == 0 {
                     self.marill_sprite.sequence = 2;
                     self.marill_sprite.elapsed = 0;
@@ -3072,8 +3150,13 @@ impl OakSpeech {
                 // BgSetPosTextAndCommit(MAIN_1, SET_X, 0) (:2023).
                 self.frame.main.bgs[1].scroll_x = 0;
                 self.create_multichoice_yesno_menu(input);
-                self.fade
-                    .begin_with_screens(FadeScreens::Both, FadeType::BrightnessIn, FadeColor::Black, 6, 1);
+                self.fade.begin_with_screens(
+                    FadeScreens::Both,
+                    FadeType::BrightnessIn,
+                    FadeColor::Black,
+                    6,
+                    1,
+                );
                 self.main_state = MainState::ConfirmNameYesNoInitMenu;
                 self.draw_pic(Pic::Oak);
                 self.gender_visible = [self.player_gender == 0, self.player_gender == 1];
@@ -3193,8 +3276,13 @@ impl OakSpeech {
                 } else {
                     self.draw_pic(Pic::Lyra);
                 }
-                self.fade
-                    .begin_with_screens(FadeScreens::Both, FadeType::BrightnessIn, FadeColor::Black, 6, 1);
+                self.fade.begin_with_screens(
+                    FadeScreens::Both,
+                    FadeType::BrightnessIn,
+                    FadeColor::Black,
+                    6,
+                    1,
+                );
                 self.main_state = MainState::WaitFadeInToShrinkAnim;
                 self.frame.main.bgs[0].enabled = false;
             }
@@ -3412,7 +3500,9 @@ impl App for OakSpeech {
             self.marill_sprite.elapsed = self.marill_sprite.elapsed.saturating_add(1);
         }
         for (sprite, visible) in self.gender_sprites.iter_mut().zip(self.gender_visible) {
-            if visible { self.frame.sub.sprites.push(sprite.clone()); }
+            if visible {
+                self.frame.sub.sprites.push(sprite.clone());
+            }
             sprite.elapsed = sprite.elapsed.saturating_add(1);
         }
         if self.touch_active {

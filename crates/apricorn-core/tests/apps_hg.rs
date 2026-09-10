@@ -535,14 +535,25 @@ fn game_walks_boot_to_bedroom() {
     game_tick(&mut game, 274, Input::default());
     let frame = game_tick(&mut game, 275, Input::default()).clone();
     assert_eq!(game.state(), GameState::MainMenu);
-    assert_eq!(frame.main.windows.len(), 0, "the EXIT pass freed the window");
+    assert_eq!(
+        frame.main.windows.len(),
+        0,
+        "the EXIT pass freed the window"
+    );
 
     // The menu's SetupGraphics (276): three engine-A layers on at
     // pret's priorities, the screens still flipped.
     let frame = game_tick(&mut game, 276, Input::default()).clone();
     assert_eq!(frame.display, DisplaySelect::SubOnTop);
     assert!(frame.main.bgs[0].enabled && frame.main.bgs[1].enabled && frame.main.bgs[2].enabled);
-    assert_eq!((frame.main.bgs[0].priority, frame.main.bgs[1].priority, frame.main.bgs[2].priority), (2, 1, 0));
+    assert_eq!(
+        (
+            frame.main.bgs[0].priority,
+            frame.main.bgs[1].priority,
+            frame.main.bgs[2].priority
+        ),
+        (2, 1, 0)
+    );
 
     // 277: Prepare → ChooseApp; 278: the no-save probe picks NEW
     // GAME and begins the exit fade (the OUT-black quirk: the
@@ -550,7 +561,11 @@ fn game_walks_boot_to_bedroom() {
     // ever draw — the window list stays empty.
     game_tick(&mut game, 277, Input::default());
     game_tick(&mut game, 278, Input::default());
-    assert_eq!(game.frame().main.windows.len(), 0, "no build without a save");
+    assert_eq!(
+        game.frame().main.windows.len(),
+        0,
+        "no build without a save"
+    );
     // 279-283: the fade's six steps (283's snaps dark), 284: the
     // flag clears, 285: the poll takes the free state, 286: the free
     // pass — the menu's eleventh tick, advancing to NewGameInit with
@@ -567,8 +582,15 @@ fn game_walks_boot_to_bedroom() {
     game_tick(&mut game, 285, Input::default());
     let frame = game_tick(&mut game, 286, Input::default()).clone();
     assert_eq!(game.state(), GameState::NewGameInit);
-    assert_eq!(game.menu_exit(), Some(apricorn_core::app::main_menu::MainMenuExit::NewGame));
-    assert_eq!(frame.display, DisplaySelect::MainOnTop, "FreeGraphics restores the order");
+    assert_eq!(
+        game.menu_exit(),
+        Some(apricorn_core::app::main_menu::MainMenuExit::NewGame)
+    );
+    assert_eq!(
+        frame.display,
+        DisplaySelect::MainOnTop,
+        "FreeGraphics restores the order"
+    );
     assert_eq!(frame.main.windows.len(), 0);
 
     // Frame 287: NewGameInit's first tick — the ov36 init's
@@ -577,12 +599,12 @@ fn game_walks_boot_to_bedroom() {
     assert_eq!(game.lcrng().seed(), rtc.rng_seed(287));
     assert_eq!(game.state(), GameState::OakSpeech);
 
-    // Oak's speech runs 288–2928 (2641 ticks, its local k = global
+    // Oak's speech runs 288–2998 (2711 ticks, its local k = global
     // − 288). The scripted walk: NO INFO at the button tutorial's
     // menu (DOWN×3 to cursor 2, A), the male gender (the resting
     // cursor, A), YES on both confirm menus (pad-init A then arm A
     // each — the multichoice's 20-frame hold runs the confirmation),
-    // and "MATTS" through the naming seam. The kind-1 dialogs
+    // and "MATTS" through real stylus entry. The kind-1 dialogs
     // page-wait (AUTO_SCROLL_OFF), so A is pulsed on alternate ticks
     // across each dialog's print range.
     let dialog_pulse = |i: u32| {
@@ -606,13 +628,29 @@ fn game_walks_boot_to_bedroom() {
         _ => None,
     };
     let name = GameString::from_units(&[311, 299, 318, 318, 317]); // "MATTS"
-    for i in 288..=2928u32 {
-        let keys = if dialog_pulse(i) || menu_press(i).is_some() {
-            Keys(menu_press(i).unwrap_or(key::A))
+    for i in 288..=2998u32 {
+        let script_i = if i > 2370 {
+            i - 70
+        } else if i >= 2300 {
+            u32::MAX
+        } else {
+            i
+        };
+        let keys = if matches!(i, 2334 | 2336) {
+            Keys(if i == 2334 { key::START } else { key::A })
+        } else if dialog_pulse(script_i) || menu_press(script_i).is_some() {
+            Keys(menu_press(script_i).unwrap_or(key::A))
         } else {
             Keys::IDLE
         };
-        let frame = game_tick(&mut game, i, Input { keys, touch: None }).clone();
+        let touch = match i {
+            2324 => Some(apricorn_core::input::Touch { x: 61, y: 108 }),
+            2326 => Some(apricorn_core::input::Touch { x: 29, y: 89 }),
+            2328 | 2330 => Some(apricorn_core::input::Touch { x: 173, y: 108 }),
+            2332 => Some(apricorn_core::input::Touch { x: 157, y: 108 }),
+            _ => None,
+        };
+        let frame = game_tick(&mut game, i, Input { keys, touch }).clone();
         match i {
             // 290: the tutorial menu's fade-in begun — its first step
             // (of six) already shows on the begin tick, done by 297.
@@ -640,41 +678,49 @@ fn game_walks_boot_to_bedroom() {
             }
             650 => assert_eq!(frame.main.blend.evy, 0),
             // 2299: the naming launch's fade-out finished — the
-            // overlay runs, the machine still Oak. Deliver the name
-            // for the next tick to consume.
+            // overlay is ready, the machine still Oak. The next tick
+            // constructs and runs the nested naming screen.
             2299 => {
                 assert_eq!(game.state(), GameState::OakSpeech);
-                game.deliver_naming_result(name.clone());
+                assert!(game.naming().is_none());
             }
-            // 2303: PromptNameRestoreGraphicsAfter — the yes/no menu
+            // 2373: PromptNameRestoreGraphicsAfter — the yes/no menu
             // back on the sub screen.
-            2303 => assert_eq!(frame.sub.windows.len(), 2),
+            2300 => assert!(game.naming().is_some()),
+            2332 => assert_eq!(game.naming().unwrap().entry(), name.units()),
+            2370 => assert!(game.naming().is_none()),
+            2373 => assert_eq!(frame.sub.windows.len(), 2),
             _ => {}
         }
-        if i < 2928 {
+        if i < 2998 {
             assert_eq!(game.state(), GameState::OakSpeech);
         }
     }
 
-    // 2928: the shrink anim's finish — the speech-over fade-out done,
+    // 2998: the shrink anim's finish — the speech-over fade-out done,
     // the machine takes the post-Oak pass.
     assert_eq!(game.state(), GameState::AfterOakSpeech);
+    assert_eq!(game.player().unwrap().name, name);
+    assert_eq!(game.player().unwrap().gender, 0);
 
-    // 2929: the post-Oak pass's first tick re-seeds again, then the
+    // 2999: the post-Oak pass's first tick re-seeds again, then the
     // bedroom.
-    game_tick(&mut game, 2929, Input::default());
-    assert_eq!(game.lcrng().seed(), rtc.rng_seed(2929));
+    game_tick(&mut game, 2999, Input::default());
+    let mut expected_rng = apricorn_core::rng::Lcrng::new(rtc.rng_seed(2999));
+    expected_rng.next_u16();
+    expected_rng.next_u16();
+    assert_eq!(game.lcrng(), &expected_rng);
     assert_eq!(game.state(), GameState::Bedroom);
+    let data = game.new_game_data().unwrap();
+    assert!(data.oak_complete);
+    assert_eq!(data.money(), 3000);
+    assert_eq!(data.position(), [64, u32::MAX, 6, 6, 1]);
 
-    // The bedroom is Phase 4's end state: it holds, a cleared frame
-    // (the fieldsys renders the room in Phase 5).
-    for i in 2930..=2939 {
+    // The bedroom is the static field entry; assets persist over idle ticks.
+    for i in 3000..=3009 {
         let frame = game_tick(&mut game, i, Input::default()).clone();
         assert_eq!(game.state(), GameState::Bedroom);
-        assert!(
-            !frame.main.bgs[0].enabled,
-            "a cleared frame while the overworld is deferred"
-        );
+        assert_eq!(frame.main.field.as_ref().unwrap().map_id, 64);
     }
 }
 
@@ -736,7 +782,10 @@ fn game_menu_builds_and_dialogs_with_a_clean_save() {
         }),
         "NEW GAME resting"
     );
-    assert_eq!(frame.main.brightness.mode, apricorn_core::frame::BrightnessMode::Down);
+    assert_eq!(
+        frame.main.brightness.mode,
+        apricorn_core::frame::BrightnessMode::Down
+    );
 
     // The fade-in's six steps (279-284) then the free tick (285); the
     // poll tick (286) takes the interactive state, so 287 is the
@@ -791,7 +840,11 @@ fn game_menu_builds_and_dialogs_with_a_clean_save() {
     game_tick(&mut game, 289, Input::default());
     game_tick(&mut game, 290, Input::default());
     let frame = game_tick(&mut game, 291, Input::default()).clone();
-    assert_eq!(frame.main.windows.len(), 8, "five buttons + three dialog windows");
+    assert_eq!(
+        frame.main.windows.len(),
+        8,
+        "five buttons + three dialog windows"
+    );
     assert!(!frame.main.bgs[0].enabled, "MAIN_0 off behind the dialog");
     assert!(frame.main.bgs[1].enabled, "MAIN_1 carries the dialog");
     assert!(!frame.main.bgs[2].enabled, "MAIN_2 off behind the dialog");
@@ -825,7 +878,11 @@ fn game_menu_builds_and_dialogs_with_a_clean_save() {
         },
     )
     .clone();
-    assert_eq!(frame.main.windows.len(), 5, "the close truncated the dialog windows");
+    assert_eq!(
+        frame.main.windows.len(),
+        5,
+        "the close truncated the dialog windows"
+    );
     game_tick(&mut game, 323, Input::default());
     assert!(game.frame().main.bgs[0].enabled, "the planes restored");
     assert!(!game.frame().main.bgs[1].enabled);
@@ -834,7 +891,10 @@ fn game_menu_builds_and_dialogs_with_a_clean_save() {
     }
     let frame = game_tick(&mut game, 332, Input::default()).clone();
     assert_eq!(game.state(), GameState::NewGameInit);
-    assert_eq!(game.menu_exit(), Some(apricorn_core::app::main_menu::MainMenuExit::NewGame));
+    assert_eq!(
+        game.menu_exit(),
+        Some(apricorn_core::app::main_menu::MainMenuExit::NewGame)
+    );
     assert_eq!(frame.display, DisplaySelect::MainOnTop);
 }
 

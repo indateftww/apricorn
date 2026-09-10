@@ -13,8 +13,8 @@ use apricorn_core::cache;
 use apricorn_core::font::Font;
 use apricorn_core::frame::{
     ARROW_TILE_OFFSETS, AssetId, BgLayer, Blend, BlendEffect, BrightnessMode, ColorMode,
-    EngineFrame, LogicalFrame, MasterBrightness, PaletteLoad, TextColor, TilePlacement, Window,
-    WindowArrow, WindowFocus, WindowFrame, WindowGlyph, Sprite, plane,
+    EngineFrame, LogicalFrame, MasterBrightness, PaletteLoad, Sprite, TextColor, TilePlacement,
+    Window, WindowArrow, WindowFocus, WindowFrame, WindowGlyph, plane,
 };
 use apricorn_gfx::{AssetSource, ScreenBuffer, render};
 use sha1::{Digest, Sha1};
@@ -41,6 +41,10 @@ struct FixtureStore {
 
 impl FixtureStore {
     fn add_sprite(&mut self, tiles: AssetId, palette: AssetId) -> Sprite {
+        self.add_sprite_with_bank(tiles, palette, 0)
+    }
+
+    fn add_sprite_with_bank(&mut self, tiles: AssetId, palette: AssetId, bank: u8) -> Sprite {
         let header = |kind: cache::ChunkKind| {
             let mut chunk = cache::MAGIC.to_vec();
             chunk.extend_from_slice(&cache::VERSION.to_le_bytes());
@@ -50,20 +54,34 @@ impl FixtureStore {
         let mut chunk = header(cache::ChunkKind::Cells);
         chunk.extend_from_slice(&[1, 0, 0, 0]); // one cell, 1D32K
         chunk.extend_from_slice(&[1, 0, 0, 0]); // one OAM entry
-        for v in [-2i16, 252, 0, 252, 510, 0] { chunk.extend_from_slice(&v.to_le_bytes()); }
-        chunk.extend_from_slice(&[0; 6]); // palette, priority, shape, size, flags, mode
+        for v in [-2i16, 252, 0, 252, 510, 0] {
+            chunk.extend_from_slice(&v.to_le_bytes());
+        }
+        chunk.extend_from_slice(&[bank, 0, 0, 0, 0, 0]); // palette, priority, shape, size, flags, mode
         chunk.extend_from_slice(&[0; 2]); // no labels
         let cells = AssetId::from_index(self.items.len());
-        self.items.push(Fix::Cells(cache::Cells::parse(&chunk).unwrap()));
+        self.items
+            .push(Fix::Cells(cache::Cells::parse(&chunk).unwrap()));
         let mut chunk = header(cache::ChunkKind::Animation);
         chunk.extend_from_slice(&[1, 0]); // one sequence
         chunk.extend_from_slice(&[1, 0, 0, 0, 1, 0, 0, 0]); // one frame, forward, cell-only
         chunk.extend_from_slice(&[0, 0, 1, 0]); // cell 0, duration 1
         chunk.extend_from_slice(&[0; 16]); // translation, rotation, scale
         let animation = AssetId::from_index(self.items.len());
-        self.items.push(Fix::Animation(cache::Animation::parse(&chunk).unwrap()));
-        Sprite { tiles, palette, cells, animation, sequence: 0, elapsed: 0,
-            x: 4, y: 6, priority: 0, palette_bank: 1 }
+        self.items
+            .push(Fix::Animation(cache::Animation::parse(&chunk).unwrap()));
+        Sprite {
+            tiles,
+            palette,
+            cells,
+            animation,
+            sequence: 0,
+            elapsed: 0,
+            x: 4,
+            y: 6,
+            priority: 0,
+            palette_bank: 1,
+        }
     }
     fn new() -> Self {
         Self { items: Vec::new() }
@@ -154,25 +172,30 @@ impl FixtureStore {
             // Glyph `index`: the given rows (level L per row: both
             // half rows the byte L·0b01010101... pairs), or zero.
             for row in 0..8 {
-                let level = glyphs
-                    .get(index)
-                    .map_or(0, |rows| rows[row]);
+                let level = glyphs.get(index).map_or(0, |rows| rows[row]);
                 let byte = level * 0b01010101;
                 data.push(byte); // low byte: pixels 4-7
                 data.push(byte); // high byte: pixels 0-3
             }
         }
-        self.items.push(Fix::Font(Font::parse(&data).expect("fixture font parses")));
+        self.items
+            .push(Fix::Font(Font::parse(&data).expect("fixture font parses")));
         AssetId::from_index(self.items.len() - 1)
     }
 }
 
 impl AssetSource for FixtureStore {
     fn cells(&self, id: AssetId) -> Option<&cache::Cells> {
-        match self.items.get(id.index()) { Some(Fix::Cells(cells)) => Some(cells), _ => None }
+        match self.items.get(id.index()) {
+            Some(Fix::Cells(cells)) => Some(cells),
+            _ => None,
+        }
     }
     fn animation(&self, id: AssetId) -> Option<&cache::Animation> {
-        match self.items.get(id.index()) { Some(Fix::Animation(animation)) => Some(animation), _ => None }
+        match self.items.get(id.index()) {
+            Some(Fix::Animation(animation)) => Some(animation),
+            _ => None,
+        }
     }
     fn tiles(&self, id: AssetId) -> Option<&cache::Tiles> {
         match self.items.get(id.index()) {
@@ -239,7 +262,10 @@ fn load_palette(asset: AssetId) -> PaletteLoad {
 
 /// One tile-set placement at tile offset 0.
 fn place(tiles: AssetId) -> TilePlacement {
-    TilePlacement { asset: tiles, tile: 0 }
+    TilePlacement {
+        asset: tiles,
+        tile: 0,
+    }
 }
 
 /// One engine: `layers` at BG0.., tiles placed per `(slot, asset)`,
@@ -372,10 +398,7 @@ fn later_placements_win_an_overlap_and_palette_loads_compose_in_order() {
     let red = store.add_tiles(0, &[1u8; 64]);
     let green = store.add_tiles(0, &[2u8; 64]);
     let screen = store.add_screen(8, 8, &[entry(0, false, false, 0)]);
-    let palette = store.add_palette(
-        true,
-        &[[0, 0, 0, 255], [255, 0, 0, 255], [0, 255, 0, 255]],
-    );
+    let palette = store.add_palette(true, &[[0, 0, 0, 255], [255, 0, 0, 255], [0, 255, 0, 255]]);
     let mut e = engine(&[bg_layer(screen)], &[], palette);
     e.char_blocks[0].push(place(red));
     e.char_blocks[0].push(place(green));
@@ -384,7 +407,11 @@ fn later_placements_win_an_overlap_and_palette_loads_compose_in_order() {
         ..LogicalFrame::default()
     };
     let [main, _] = render(&frame, &store);
-    assert_eq!(main.pixel(0, 0), [0, 255, 0, 255], "the later placement wins");
+    assert_eq!(
+        main.pixel(0, 0),
+        [0, 255, 0, 255],
+        "the later placement wins"
+    );
 
     // Palette RAM composes in order: a 1-color load at offset 2
     // overwrites the green the winning tile displays.
@@ -396,7 +423,11 @@ fn later_placements_win_an_overlap_and_palette_loads_compose_in_order() {
         colors: 1,
     });
     let [main, _] = render(&frame, &store);
-    assert_eq!(main.pixel(0, 0), [9, 9, 9, 255], "the later load overwrites");
+    assert_eq!(
+        main.pixel(0, 0),
+        [9, 9, 9, 255],
+        "the later load overwrites"
+    );
 
     // A load past RAM's end clips, not panics.
     frame.main.palette_loads.push(PaletteLoad {
@@ -405,7 +436,11 @@ fn later_placements_win_an_overlap_and_palette_loads_compose_in_order() {
         colors: 100,
     });
     let [main, _] = render(&frame, &store);
-    assert_eq!(main.pixel(0, 0), [9, 9, 9, 255], "the clip keeps RAM intact");
+    assert_eq!(
+        main.pixel(0, 0),
+        [9, 9, 9, 255],
+        "the clip keeps RAM intact"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -680,6 +715,7 @@ fn window_frame(store: &mut FixtureStore) -> (LogicalFrame, AssetId) {
         palette: 2,
         base_tile: 0,
         fill: 0xF,
+        fills: Vec::new(),
         glyphs: vec![
             WindowGlyph {
                 font,
@@ -703,7 +739,13 @@ fn window_frame(store: &mut FixtureStore) -> (LogicalFrame, AssetId) {
         arrow: None,
         focus: None,
     });
-    (LogicalFrame { main: e, ..LogicalFrame::default() }, font)
+    (
+        LogicalFrame {
+            main: e,
+            ..LogicalFrame::default()
+        },
+        font,
+    )
 }
 
 #[test]
@@ -765,9 +807,7 @@ fn window_frame_and_arrow_draw_from_the_owning_char_block() {
     let mut store = FixtureStore::new();
     // 30 uniform tiles, tile n = value (n % 15) + 1: the frame border
     // (tiles 0-8) and the arrow's first two frames (18-21, 22-25).
-    let pixels: Vec<u8> = (0..30)
-        .flat_map(|n| [((n % 15) + 1) as u8; 64])
-        .collect();
+    let pixels: Vec<u8> = (0..30).flat_map(|n| [((n % 15) + 1) as u8; 64]).collect();
     let tiles = store.add_tiles(0, &pixels);
     let palette = store.add_palette(true, &gray_palette(64));
     let mut e = EngineFrame::default();
@@ -789,6 +829,7 @@ fn window_frame_and_arrow_draw_from_the_owning_char_block() {
         base_tile: 0,
         fill: 1,
         glyphs: Vec::new(),
+        fills: Vec::new(),
         scroll: 0,
         frame: Some(WindowFrame {
             base_tile: 0,
@@ -834,8 +875,16 @@ fn window_frame_and_arrow_draw_from_the_owning_char_block() {
         index: 2,
     });
     let [main, _] = render(&frame, &store);
-    assert_eq!(main.pixel(32, 8)[0], 16 + ((26 % 15) + 1), "index 2: tile 26");
-    assert_eq!(ARROW_TILE_OFFSETS, [0, 1, 2, 1], "the cycle the index walks");
+    assert_eq!(
+        main.pixel(32, 8)[0],
+        16 + ((26 % 15) + 1),
+        "index 2: tile 26"
+    );
+    assert_eq!(
+        ARROW_TILE_OFFSETS,
+        [0, 1, 2, 1],
+        "the cycle the index walks"
+    );
 }
 
 #[test]
@@ -869,6 +918,7 @@ fn window_focus_indicator_blits_its_frame_in_the_reserved_column() {
         palette: 2,
         base_tile: 0,
         fill: 0xF,
+        fills: Vec::new(),
         glyphs: vec![WindowGlyph {
             font,
             glyph: 1,
@@ -914,7 +964,7 @@ fn window_focus_indicator_blits_its_frame_in_the_reserved_column() {
     // A scroll landing after the blit lifts it with the content —
     // its last rows vacate to the fill — while the print-time scroll
     // rides along unchanged.
-    frame.main.windows[0].scroll = 4;
+    frame.main.windows.last_mut().unwrap().scroll = 4;
     let [main, _] = render(&frame, &store);
     assert_eq!(
         main.pixel(40, 36)[0],
@@ -956,6 +1006,7 @@ fn later_windows_draw_over_earlier_ones() {
             base_tile: 0,
             fill,
             glyphs: Vec::new(),
+            fills: Vec::new(),
             scroll: 0,
             frame: None,
             arrow: None,
@@ -1147,14 +1198,25 @@ fn window_zero_indices_reveal_lower_planes_not_the_replaced_tilemap() {
     let under = store.add_tiles(0, &[7; 64]);
     frame.main.bgs[0].screen = Some(screen);
     frame.main.char_blocks[0].push(place(old));
-    frame.main.bgs[1] = BgLayer { char_base: 1, ..bg_layer(screen) };
+    frame.main.bgs[1] = BgLayer {
+        char_base: 1,
+        ..bg_layer(screen)
+    };
     frame.main.char_blocks[1].push(place(under));
     frame.main.windows[0].fill = 0;
     frame.main.windows[0].glyphs[0].color.fg = 0;
     let [main, _] = render(&frame, &store);
     assert_eq!(main.pixel(0, 0)[0], 5, "old BG0 outside the window");
-    assert_eq!(main.pixel(16, 16)[0], 7, "glyph ink mapped to zero reveals BG1");
-    assert_eq!(main.pixel(31, 31)[0], 7, "zero fill reveals BG1, not palette-bank color 0");
+    assert_eq!(
+        main.pixel(16, 16)[0],
+        7,
+        "glyph ink mapped to zero reveals BG1"
+    );
+    assert_eq!(
+        main.pixel(31, 31)[0],
+        7,
+        "zero fill reveals BG1, not palette-bank color 0"
+    );
     assert_eq!(main.pixel(16, 17)[0], 34, "nonzero shadow remains opaque");
 }
 
@@ -1173,31 +1235,132 @@ fn obj_cells_use_signed_offsets_separate_palettes_and_hardware_priority() {
     frame.main.char_blocks[0].push(place(bg_tiles));
     frame.main.palette_loads.push(load_palette(bg_palette));
     let [main, _] = render(&frame, &store);
-    assert_eq!(main.pixel(3, 2)[0], 17, "(4,6) + signed (-2,-4), independent OBJ palette bank 1");
+    assert_eq!(
+        main.pixel(3, 2)[0],
+        17,
+        "(4,6) + signed (-2,-4), independent OBJ palette bank 1"
+    );
     assert_eq!(main.pixel(2, 2)[0], 99, "OBJ index zero reveals BG0");
     assert_eq!(main.pixel(9, 9)[0], 23, "8x8 cell ends at (9,9)");
     assert_eq!(main.pixel(10, 9)[0], 99, "outside the cell");
     frame.main.sprites[0].priority = 1;
-    assert_eq!(render(&frame, &store)[0].pixel(3, 2)[0], 99, "higher-priority BG hides OBJ");
+    assert_eq!(
+        render(&frame, &store)[0].pixel(3, 2)[0],
+        99,
+        "higher-priority BG hides OBJ"
+    );
     frame.main.sprites[0].priority = 0;
-    frame.main.blend = Blend { plane1: plane::OBJ, effect: BlendEffect::BrightnessUp, evy: 16, ..Blend::default() };
+    frame.main.blend = Blend {
+        plane1: plane::OBJ,
+        effect: BlendEffect::BrightnessUp,
+        evy: 16,
+        ..Blend::default()
+    };
     let [main, _] = render(&frame, &store);
     assert_eq!(main.pixel(3, 2), [255; 4], "OBJ participates in the flash");
     assert_eq!(main.pixel(2, 2)[0], 99, "the flash leaves BG0 alone");
 }
 
 #[test]
+fn obj_cell_palette_bank_is_added_to_resource_placement() {
+    let mut store = FixtureStore::new();
+    let tiles = store.add_tiles(0, &[1; 64]);
+    let palette = store.add_palette(true, &gray_palette(256));
+    let sprite = store.add_sprite_with_bank(tiles, palette, 2);
+    let mut frame = LogicalFrame::default();
+    frame.main.sprites.push(sprite);
+    assert_eq!(
+        render(&frame, &store)[0].pixel(3, 2)[0],
+        49,
+        "resource bank 1 + OAM bank 2"
+    );
+    frame.main.sprites[0].palette_bank = 15;
+    assert_eq!(
+        render(&frame, &store)[0].pixel(3, 2)[0],
+        17,
+        "bank addition wraps at 16"
+    );
+}
+
+#[test]
+fn window_rect_fills_are_clipped_ordered_and_scroll_with_content() {
+    let mut store = FixtureStore::new();
+    let (mut frame, _) = window_frame(&mut store);
+    frame.main.windows.push(Window {
+        width: 2,
+        height: 2,
+        fill: 1,
+        palette: 0,
+        fills: vec![(4, 4, 8, 8, 2), (8, 8, 20, 20, 3)],
+        ..Window::default()
+    });
+    let [screen, _] = render(&frame, &store);
+    assert_eq!(screen.pixel(0, 0)[0], 1);
+    assert_eq!(screen.pixel(4, 4)[0], 2);
+    assert_eq!(screen.pixel(8, 8)[0], 3);
+    frame.main.windows.last_mut().unwrap().scroll = 4;
+    assert_eq!(render(&frame, &store)[0].pixel(4, 0)[0], 2);
+}
+
+#[test]
+fn zero_color_glyph_pixels_preserve_window_background() {
+    let mut store = FixtureStore::new();
+    let (mut frame, font) = window_frame(&mut store);
+    frame.main.windows.clear();
+    frame.main.windows.push(Window {
+        width: 2,
+        height: 2,
+        fill: 4,
+        glyphs: vec![WindowGlyph {
+            font,
+            glyph: 2,
+            x: 0,
+            y: 0,
+            color: TextColor::new(14, 15, 0),
+            double_rows: false,
+        }],
+        ..Window::default()
+    });
+    // Fixture glyph 2 is entirely level 3 (background), mapped to 0.
+    assert_eq!(render(&frame, &store)[0].pixel(0, 0)[0], 4);
+}
+
+#[test]
+fn hardware_window_masks_scrolled_bg_and_its_message_windows() {
+    let mut store = FixtureStore::new();
+    let (mut frame, _) = window_frame(&mut store);
+    frame.main.bgs[0].hidden_rect = Some((0, 0, 255, 24));
+    let [screen, _] = render(&frame, &store);
+    assert_eq!(screen.pixel(16, 16), [0, 0, 0, 255]);
+    assert_ne!(screen.pixel(16, 24), [0, 0, 0, 255]);
+}
+
+#[test]
 fn dialogue_border_uses_all_eighteen_tiles_and_arrow_keeps_border_palette() {
     let mut store = FixtureStore::new();
-    let tiles = store.add_tiles(0, &(0..30).flat_map(|n| [(n % 15 + 1) as u8; 64]).collect::<Vec<_>>());
+    let tiles = store.add_tiles(
+        0,
+        &(0..30)
+            .flat_map(|n| [(n % 15 + 1) as u8; 64])
+            .collect::<Vec<_>>(),
+    );
     let palette = store.add_palette(true, &gray_palette(80));
     let mut frame = LogicalFrame::default();
     frame.main.bgs[0].enabled = true;
     frame.main.char_blocks[0].push(place(tiles));
     frame.main.palette_loads.push(load_palette(palette));
     frame.main.windows.push(Window {
-        left: 2, top: 2, width: 3, height: 4, palette: 2, fill: 15,
-        frame: Some(WindowFrame { base_tile: 0, palette: 4, dialogue: true }),
+        left: 2,
+        top: 2,
+        width: 3,
+        height: 4,
+        palette: 2,
+        fill: 15,
+        frame: Some(WindowFrame {
+            base_tile: 0,
+            palette: 4,
+            dialogue: true,
+        }),
         ..Window::default()
     });
     let [main, _] = render(&frame, &store);
@@ -1205,20 +1368,37 @@ fn dialogue_border_uses_all_eighteen_tiles_and_arrow_keeps_border_palette() {
     // center, and three right. Mid-row center is the window buffer.
     for (y, row) in [(8, 0), (16, 1), (48, 2)] {
         for (x, column) in [(0, 0), (8, 1), (16, 2), (40, 3), (48, 4), (56, 5)] {
-            if row == 1 && column == 2 { continue; }
-            assert_eq!(main.pixel(x, y)[0], 64 + ((row * 6 + column) % 15 + 1) as u8);
+            if row == 1 && column == 2 {
+                continue;
+            }
+            assert_eq!(
+                main.pixel(x, y)[0],
+                64 + ((row * 6 + column) % 15 + 1) as u8
+            );
         }
     }
-    frame.main.windows[0].arrow = Some(WindowArrow { base_tile: 0, index: 0 });
+    frame.main.windows[0].arrow = Some(WindowArrow {
+        base_tile: 0,
+        index: 0,
+    });
     let [main, _] = render(&frame, &store);
-    assert_eq!(main.pixel(48, 32)[0], 68, "arrow tile 18 replaces the side border, preserving bank 4");
+    assert_eq!(
+        main.pixel(48, 32)[0],
+        68,
+        "arrow tile 18 replaces the side border, preserving bank 4"
+    );
 }
 
 #[test]
 fn blend_brightness_only_changes_the_displayed_target_plane() {
     let mut store = FixtureStore::new();
     let (mut frame, _) = window_frame(&mut store);
-    frame.main.blend = Blend { effect: BlendEffect::BrightnessUp, plane1: plane::BG0, evy: 16, ..Blend::default() };
+    frame.main.blend = Blend {
+        effect: BlendEffect::BrightnessUp,
+        plane1: plane::BG0,
+        evy: 16,
+        ..Blend::default()
+    };
     let [main, _] = render(&frame, &store);
     assert_eq!(main.pixel(16, 16), [255; 4]);
     assert_eq!(main.pixel(0, 0), [0, 0, 0, 255], "untargeted backdrop");

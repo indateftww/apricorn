@@ -16,6 +16,7 @@ pub mod app;
 pub mod assets;
 pub mod cache;
 pub mod data;
+pub mod field;
 pub mod font;
 pub mod formats;
 pub mod frame;

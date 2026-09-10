@@ -7,7 +7,11 @@ reimplements the game logic with behavioral equivalence: same RNG outcomes,
 same formulas, same save format.
 
 - The plan, phase by phase: [PLAN.md](PLAN.md)
-- Status: Phase 0 (scoping & research foundation)
+- Status: Phase 4 functional milestone accepted — boot, menu, Oak introduction and player-name entry run
+  on desktop, initialize new-game data and land in the rendered bedroom.
+  Next is Phase 5 movement; exact scene parity is tracked in Phase 8.
+- Run: `cargo run -p apricorn-desktop -- --rom hg_usa.nds`
+- Controls and remaining parity work: [game flow](docs/game-flow.md)
 
 ## Requirements
 

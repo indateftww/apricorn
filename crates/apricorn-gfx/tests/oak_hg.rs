@@ -370,3 +370,58 @@ fn tutorial_dialogue_and_gender_portraits_render() {
         }
     }
 }
+
+#[test]
+fn pokeball_is_visible_before_the_opening_flash() {
+    let path = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../hg_usa.nds"));
+    if !path.exists() {
+        return;
+    }
+    let store = Mutex::new(AssetStore::open(path).unwrap());
+    let mut oak = OakSpeech::load(&store, RtcDateTime::new(2010, 3, 14, 0, 12, 0, 0)).unwrap();
+    let mut ball_frames = 0;
+    for index in 288..=1400 {
+        let pulse = index % 2 == 0
+            && matches!(index,
+            462..=628 | 651..=1114 | 1143..=1268 | 1361..=1738);
+        let keys = match index {
+            359 | 361 | 363 => key::DOWN,
+            365 => key::A,
+            _ if pulse => key::A,
+            _ => 0,
+        };
+        oak.tick(
+            apricorn_core::Frame { index },
+            Input {
+                keys: Keys(keys),
+                touch: None,
+            },
+        );
+        let frame = oak.frame();
+        if frame.main.sprites.iter().any(|s| s.sequence == 3) {
+            ball_frames += 1;
+            if ball_frames != 1 {
+                continue;
+            }
+            let store = store.lock().unwrap();
+            let screens = render(frame, &*store);
+            let mut without_ball = frame.clone();
+            without_ball.main.sprites.clear();
+            let underneath = render(&without_ball, &*store);
+            // NCER cell 2: a 16x16 ball at sprite (160,80) + (-9,-12).
+            let changed = (68..84)
+                .flat_map(|y| (151..167).map(move |x| (x, y)))
+                .filter(|&(x, y)| screens[0].pixel(x, y) != underneath[0].pixel(x, y))
+                .count();
+            assert!(
+                changed > 20,
+                "ball vanished before the flash: {changed} pixels"
+            );
+            save_screens("oak-ball.png", &screens);
+        }
+    }
+    assert!(
+        ball_frames >= 30,
+        "the ball must remain visible during the opening hold"
+    );
+}

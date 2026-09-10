@@ -28,7 +28,7 @@ use std::path::Path;
 
 use crate::cache;
 use crate::font::Font;
-use crate::formats::{MsgBank, Narc, Ncgr, Nclr, Nscr, Ncer, Nanr};
+use crate::formats::{MsgBank, Nanr, Narc, Ncer, Ncgr, Nclr, Nscr};
 use crate::frame::AssetId;
 use crate::nds::{NdsError, NdsRom, lz10};
 
@@ -370,6 +370,17 @@ pub struct AssetStore {
 }
 
 impl AssetStore {
+    /// Expanded executable data for ROM-resident lookup tables. The store's
+    /// SHA-1 gate ensures that callers' retail addresses match this image.
+    pub(crate) fn arm9_image(&self) -> Result<Vec<u8>, AssetsError> {
+        let decode = || -> Result<Vec<u8>, NdsError> {
+            Ok(NdsRom::parse(&self.rom)?.arm9_image()?.into_owned())
+        };
+        decode().map_err(|source| AssetsError::Corrupt {
+            what: "ARM9 lookup tables".into(),
+            source,
+        })
+    }
     /// Loads the default dialogue frame and builds its down-arrow tiles.
     ///
     /// `sub_0200EA68` repeats frame tiles 10/11 under each 16x16 pose,
@@ -384,12 +395,16 @@ impl AssetStore {
         let mut border = decode_tiles(&bytes, narc, frame_narc::GFX2_FRAME0_CHAR)?;
         let bytes = self.member(narc, frame_narc::DOWN_ARROW_CHAR)?;
         let arrow = decode_tiles(&bytes, narc, frame_narc::DOWN_ARROW_CHAR)?;
-        if !border.is_4bpp() || border.tile_count() != 18
-            || !arrow.is_4bpp() || arrow.tile_count() < 12
+        if !border.is_4bpp()
+            || border.tile_count() != 18
+            || !arrow.is_4bpp()
+            || arrow.tile_count() < 12
         {
             return Err(AssetsError::Corrupt {
                 what: "default dialogue frame / down arrow".to_owned(),
-                source: NdsError::Invalid { what: "expected 18 border tiles and three 16x16 arrow poses" },
+                source: NdsError::Invalid {
+                    what: "expected 18 border tiles and three 16x16 arrow poses",
+                },
             });
         }
         let mut poses = vec![0; 12 * 64];
@@ -400,7 +415,9 @@ impl AssetStore {
                 let ink = if x < 13 {
                     let source_x = x + 3;
                     arrow.pixels()[((y / 8) * 2 + source_x / 8) * 64 + (y % 8) * 8 + source_x % 8]
-                } else { 0 };
+                } else {
+                    0
+                };
                 poses[at] = if ink == 0 { background } else { ink };
             }
         }
@@ -414,8 +431,12 @@ impl AssetStore {
     /// Returns an error for missing or malformed cell data.
     pub fn load_cells(&mut self, narc: &str, member: usize) -> Result<AssetId, AssetsError> {
         let bytes = self.member(narc, member)?;
-        let cells = Ncer::parse(&bytes).and_then(|data| cache::Cells::parse(&cache::encode_cells(&data)))
-            .map_err(|source| AssetsError::Corrupt { what: format!("{narc}#{member}"), source })?;
+        let cells = Ncer::parse(&bytes)
+            .and_then(|data| cache::Cells::parse(&cache::encode_cells(&data)))
+            .map_err(|source| AssetsError::Corrupt {
+                what: format!("{narc}#{member}"),
+                source,
+            })?;
         Ok(self.push(Asset::Cells(cells)))
     }
 
@@ -425,22 +446,32 @@ impl AssetStore {
     /// Returns an error for missing or malformed animation data.
     pub fn load_animation(&mut self, narc: &str, member: usize) -> Result<AssetId, AssetsError> {
         let bytes = self.member(narc, member)?;
-        let animation = Nanr::parse(&bytes).and_then(|data| cache::encode_animation(&data))
+        let animation = Nanr::parse(&bytes)
+            .and_then(|data| cache::encode_animation(&data))
             .and_then(|data| cache::Animation::parse(&data))
-            .map_err(|source| AssetsError::Corrupt { what: format!("{narc}#{member}"), source })?;
+            .map_err(|source| AssetsError::Corrupt {
+                what: format!("{narc}#{member}"),
+                source,
+            })?;
         Ok(self.push(Asset::Animation(animation)))
     }
 
     /// Resolves a sprite cell bank.
     #[must_use]
     pub fn cells(&self, id: AssetId) -> Option<&cache::Cells> {
-        match self.assets.get(id.index()) { Some(Asset::Cells(cells)) => Some(cells), _ => None }
+        match self.assets.get(id.index()) {
+            Some(Asset::Cells(cells)) => Some(cells),
+            _ => None,
+        }
     }
 
     /// Resolves a sprite animation bank.
     #[must_use]
     pub fn animation(&self, id: AssetId) -> Option<&cache::Animation> {
-        match self.assets.get(id.index()) { Some(Asset::Animation(animation)) => Some(animation), _ => None }
+        match self.assets.get(id.index()) {
+            Some(Asset::Animation(animation)) => Some(animation),
+            _ => None,
+        }
     }
     /// The SHA-1 of the retail dump the asset tables are pinned to
     /// (HeartGold US) — the same constant `apicorn-harness` traces and
@@ -531,7 +562,11 @@ impl AssetStore {
     /// # Errors
     /// Returns an [`AssetsError`] when the path or member is missing or
     /// the member is not a parseable MAT bank.
-    pub fn load_msg_bank(&mut self, narc_path: &str, member: usize) -> Result<AssetId, AssetsError> {
+    pub fn load_msg_bank(
+        &mut self,
+        narc_path: &str,
+        member: usize,
+    ) -> Result<AssetId, AssetsError> {
         let bytes = self.member(narc_path, member)?;
         let bank = MsgBank::parse(&bytes).map_err(|source| AssetsError::Corrupt {
             what: format!("{narc_path}#{member}"),
@@ -632,7 +667,11 @@ impl AssetStore {
     ///
     /// # Errors
     /// Returns an [`AssetsError`] when the path or member is missing.
-    fn member(&self, narc_path: &str, member: usize) -> Result<Cow<'_, [u8]>, AssetsError> {
+    pub(crate) fn member(
+        &self,
+        narc_path: &str,
+        member: usize,
+    ) -> Result<Cow<'_, [u8]>, AssetsError> {
         let rom = NdsRom::parse(&self.rom).map_err(|source| AssetsError::Corrupt {
             what: "ROM".to_owned(),
             source,

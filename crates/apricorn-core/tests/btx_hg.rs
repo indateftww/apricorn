@@ -26,10 +26,9 @@ const TEX_PLTT256: usize = 10;
 const TEX_COLOR0_TRANSPARENT: usize = 10_411;
 const BTX_USES_PLTT4: usize = 216; // files whose palettes are 4-color sets
 const PLTT_WORD1_ONE: usize = 1_612; // palette entries with word1 == 1
-/// Files where an entry's declared span overruns the texture data
-/// (dummy shadow textures; see the parser docs).
-const BTX_OVERRUN_FILES: usize = 45;
-const BTX_OVERRUN_ENTRIES: usize = 51;
+/// Correct 2-bpp PLTT4 decoding leaves no truncated retail textures.
+const BTX_OVERRUN_FILES: usize = 0;
+const BTX_OVERRUN_ENTRIES: usize = 0;
 
 fn load_rom() -> Option<Vec<u8>> {
     match std::fs::read(ROM_PATH) {
@@ -210,12 +209,12 @@ fn spot_checks_known_archives() {
     assert_eq!(sky.offset(), 0x1400);
     assert_eq!(sky.offset() + sky.data().len(), 70_656);
 
-    // A retail overrun: the h_kage shadow's declared span (128 bytes)
-    // pokes 64 bytes past the texture data; the parser clamps it.
+    // The four-color shadow is 2 bpp: its complete span is 64 bytes.
     let btx = Btx::parse(narc(&rom, "a/0/7/0").file(30).expect("member 30"))
         .expect("a/0/7/0 member 30 must be a BTX");
     let kage = btx.texture_by_name("h_kage").expect("h_kage");
-    assert_eq!(kage.declared_size(), 128);
+    assert_eq!(kage.fmt(), TexFmt::Pltt4);
+    assert_eq!(kage.declared_size(), 64);
     assert_eq!(kage.data().len(), 64);
 
     // A bank whose palette names fill all 16 bytes of their dictionary
