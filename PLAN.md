@@ -254,16 +254,63 @@ and exact parity follow-ups remain explicit in Phase 8.
 
 ## Phase 5 — Overworld
 
+Parallel workstreams (2026-09-11 →): each lands as its own reviewed
+branch with ROM-gated tests, then the orchestrator wires them into
+`app::game`. Sub-items are checked when merged, not when started.
+
 - [ ] Map engine: HGSS's map/BG layers, collision, warp/door transitions,
       camera.
+      - [ ] Field data layer: map headers (ARM9 table, pinned), matrices,
+            land data (attributes/props/model/BDHC/extra), area data,
+            terrain attributes + collision bits, map events, script
+            headers, overlay-1 tables (camera presets, sprite→model).
+            → `apricorn-core::field::{map_header,matrix,land,area,terrain,
+            events,script_header,ov01}`, `docs/field-data.md`
+      - [ ] Field rendering: the 3D field composited as engine A's BG0
+            under the 2D layers/OBJ/windows, camera presets (perspective
+            and orthographic, SDK fixed-point angles), prop transforms,
+            map-object billboards with the original projection shear.
+            → `apricorn-gfx::field`, `docs/gfx.md`
+      - [ ] Warps/doors and the map-load manager's cell windowing.
 - [ ] Player movement (grid + HGSS's smooth sub-tile animation), running shoes,
       bicycle.
+      - [ ] Movement command machine (113 commands; linear steps at
+            0x800/0x1000/0x2000/0x4000/0x8000 per frame, turns, END) and
+            `PlayerAvatar_MoveControl`, differential-tested against the
+            original ARM9 step functions via arm-runner.
+            → `apricorn-core::field::{map_object,avatar,input}`,
+            `docs/field-movement.md`
+      - [ ] Bicycle, ledges/jumps, surf — later slices.
 - [ ] NPC system, interaction radius, dialogue UI boxes.
 - [ ] Scripting/event engine: HGSS's script VM (flags, vars, triggers) —
       reverse from asm where pret is incomplete; differential-test with
       `arm-runner`.
+      - [ ] VM core: 3 contexts, 20-deep stack, u16 opcodes, bank
+            mapping, init-script dispatch, typed flags/vars over save
+            block 4, host trait; the opcode subset used by the early
+            game (std init, bedroom, house, New Bark, Route 29, Elm).
+            → `apricorn-core::script`, `save::vars_flags`,
+            `docs/script-vm.md`
 - [ ] Menus: start menu, bag, party screens — including touch-screen versions.
+      - [ ] Start menu port (`src/start_menu.c`) as a host-driven scene
+            component with ROM-gated render goldens.
+            → `apricorn-core::app::start_menu`, `docs/menus.md`
 - [ ] Day/night cycle & palette tinting (pinned-clock aware).
+      - [ ] Advancing frame-indexed RTC model, time-of-day buckets
+            (differential vs `GF_RTC_GetTimeOfDayByHour`), area-light
+            archive parsing, prop time-of-day visual state.
+            → `apricorn-core::rtc`, `field::{lighting,time_state}`,
+            `docs/day-night.md`
+
+Test infrastructure landing with this phase (Phase 2's promise):
+
+- [ ] Engine trace producer + headless scripted runner (`apricorn-run`:
+      replay an `.apin` through `Game`, dump PNGs, emit a trace the
+      comparator checks against the oracle) and the boot-idle
+      engine-vs-oracle verdict. → `docs/engine-runner.md`
+- [ ] Oracle screenshots (`--shots`) and `corpus/new-game`: the real ROM
+      driven from boot to the bedroom, with milestone frames recorded
+      for engine-vs-ROM visual comparison.
 
 **Exit:** free-roam Johto with NPCs, doors, dialogue, and correct day/night —
 validated by replay traces against the oracle.
@@ -275,6 +322,11 @@ validated by replay traces against the oracle.
 The largest single phase; break into sub-milestones.
 
 - [ ] Party, PC boxes, bag/items, Pokédex data structures.
+      - [ ] Pokémon encryption/shuffle/checksum, party, player data,
+            bag and Pokédex views over the real save blocks, verified
+            on the retail save and against the original segment
+            crypt via arm-runner. → `apricorn-core::pokemon`,
+            `save::{player_data,bag,pokedex}`, `docs/pokemon.md`
 - [ ] Wild encounters: encounter tables, RNG-driven selection, shiny rolls.
 - [ ] Battle core: turn order, damage/stat/status formulas (each
       differential-tested against original ARM functions), type chart,
@@ -294,6 +346,9 @@ stat/damage/RNG tests green in CI.
 
 - [ ] SDAT playback: SSEQ (sequences), SWAR/STRM (samples/streams) — either a
       Rust synth or wrap an existing playback core; hooked into game events.
+      - [ ] Offline deterministic renderer (SSEQ sequencer + SBNK/SWAR
+            synth + 16-channel mixer, hash-pinned PCM) as the new
+            `apricorn-audio` crate. → `docs/audio.md`
 - [ ] Jingle/mixer behavior matching original channel usage so audio traces
       (sequence position per frame) can join the equivalence harness.
 
