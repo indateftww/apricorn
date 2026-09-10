@@ -33,15 +33,21 @@
 //! - [`arm`] — a test-only ARM9 interpreter (arm-runner) that loads original
 //!   ARM9 code and calls original functions with controlled inputs, the
 //!   per-function oracle where pret has no C. Never shipped in the game.
+//! - [`engine`] — the engine-side producer: the real `apricorn-core`
+//!   game replayed through the same script and regions, its watched
+//!   statics hashed by pin name (`apricorn-run`, `apricorn-replay
+//!   --engine`).
 //!
-//! The trace/diff machinery is producer-agnostic so the real engine
-//! (Phases 4+) plugs in without touching any format. All formats are
-//! documented in `docs/equivalence.md`.
+//! The trace/diff machinery is producer-agnostic, so the real engine
+//! plugged in (Phase 4) without touching any format. All formats are
+//! documented in `docs/equivalence.md`; the engine producer in
+//! `docs/engine-runner.md`.
 
 #![deny(missing_docs)]
 
 pub mod arm;
 pub mod diff;
+pub mod engine;
 pub mod input;
 pub mod oracle;
 pub mod pins;

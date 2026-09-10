@@ -18,10 +18,17 @@
 //! correct, so a diff against it is only as trustworthy as the care
 //! taken in updating it. The committed files carry hashes only — no
 //! game content (the ROM stays a local, gitignored dump).
+//!
+//! The same case replays on the engine ([`Case::run_engine`],
+//! `apricorn-replay --engine`): the real `apricorn-core` game under
+//! the case's script and regions, its trace compared against the
+//! oracle's `expected.trace` through the same comparator. The engine
+//! never defines correct — `--update` stays an oracle-only act.
 
 use std::path::{Path, PathBuf};
 
 use crate::HarnessError;
+use crate::engine::EngineRun;
 use crate::input::InputScript;
 use crate::oracle::{OracleRun, ProbeSpec};
 use crate::pins::{PinMode, PinTable};
@@ -102,6 +109,31 @@ impl Case {
             producer: None,
         }
         .run()
+    }
+
+    /// Replays the case on the engine — the real `apricorn-core` game
+    /// through [`EngineRun`], with a blank card — and returns its
+    /// trace, header gates computed as the oracle computes them so
+    /// the pair compares.
+    ///
+    /// Probes (`probes.conf`) are an oracle/arm-runner notion (pinned
+    /// addresses to call); a case that carries them still replays its
+    /// frames here, without `C` records.
+    ///
+    /// # Errors
+    /// Propagates [`EngineRun::run`]'s errors: a region the engine
+    /// cannot serve (named), an unparsable `rtc`, an unreadable ROM.
+    pub fn run_engine(&self, rom: &Path) -> Result<Trace, HarnessError> {
+        EngineRun {
+            rom,
+            regions: &self.regions,
+            script: &self.script,
+            save: None,
+            frames: None,
+            producer: None,
+        }
+        .run()
+        .map(|output| output.trace)
     }
 
     /// The case's committed expected trace, if present.
