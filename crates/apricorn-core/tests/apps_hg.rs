@@ -710,7 +710,7 @@ fn game_walks_boot_to_bedroom() {
     expected_rng.next_u16();
     expected_rng.next_u16();
     assert_eq!(game.lcrng(), &expected_rng);
-    assert_eq!(game.state(), GameState::Bedroom);
+    assert_eq!(game.state(), GameState::Field);
     let data = game.new_game_data().unwrap();
     assert!(data.oak_complete);
     assert_eq!(data.money(), 3000);
@@ -719,8 +719,8 @@ fn game_walks_boot_to_bedroom() {
     // The bedroom is the static field entry; assets persist over idle ticks.
     for i in 3000..=3009 {
         let frame = game_tick(&mut game, i, Input::default()).clone();
-        assert_eq!(game.state(), GameState::Bedroom);
-        assert_eq!(frame.main.field.as_ref().unwrap().map_id, 64);
+        assert_eq!(game.state(), GameState::Field);
+        assert_eq!(frame.main.field.as_ref().unwrap().scene.map_id, 64);
     }
 }
 

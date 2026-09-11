@@ -63,8 +63,10 @@
 //!   0x24 bytes, and `Camera::from_preset(preset, target)` takes the
 //!   player's position vector as the target.
 //!
-//! [`render`] is the shim over today's `FieldScene`: preset 4 at the
-//! player's tile with the player texture as the one billboard.
+//! [`render`] draws a [`FieldFrame`] — the per-tick view the field
+//! system publishes (`docs/field-system.md`): the scene's meshes, the
+//! frame's camera preset resolved at its target, and one billboard per
+//! [`ObjectView`].
 
 pub mod billboard;
 pub mod camera;
@@ -73,9 +75,10 @@ pub use billboard::BillboardView;
 pub use camera::{Camera, CameraPreset, Projection};
 
 use apricorn_core::field::{
-    FieldScene,
     model::{Mesh, Texture, Vertex},
+    ov01,
 };
+use apricorn_core::frame::FieldFrame;
 use camera::FX32_ONE;
 
 /// The 3D viewport width in pixels.
@@ -106,35 +109,54 @@ pub fn tile_position(tile: [i32; 2]) -> [i32; 3] {
     ]
 }
 
-/// The shim: today's [`FieldScene`] as a view — camera preset 4 (the
-/// indoor orthographic one) targeting the player's tile, the room's
-/// meshes, and the player texture as a 32×32 billboard at the tile.
+/// The core crate's camera preset (the ROM row as `field::ov01` reads
+/// it) in this crate's shape: the same fields, `perspectiveType`
+/// mapped onto [`Projection`] as `Camera_ApplyPerspectiveType` reads
+/// it (0 perspective, anything else orthographic).
 #[must_use]
-pub fn scene_view(field: &FieldScene) -> SceneView<'_> {
-    let target = tile_position(field.position);
-    let player = &field.player;
-    let size = (
-        u16::try_from(player.width).unwrap_or(u16::MAX),
-        u16::try_from(player.height).unwrap_or(u16::MAX),
-    );
-    SceneView {
-        meshes: &field.meshes,
-        billboards: vec![BillboardView {
-            texture: player,
-            rect: (0, 0, size.0, size.1),
-            world_pos: target,
-            size_px: size,
-        }],
-        camera: Camera::from_preset(&CameraPreset::INDOOR, target),
+pub fn preset_from_core(preset: &ov01::CameraPreset) -> CameraPreset {
+    CameraPreset {
+        distance: preset.distance,
+        angle: preset.angle,
+        projection: if preset.perspective_type == 0 {
+            Projection::Perspective
+        } else {
+            Projection::Orthographic
+        },
+        fovy: preset.fovy_angle,
+        near: preset.near,
+        far: preset.far,
+        look_at_offset: preset.look_at_offset,
     }
 }
 
-/// Renders a [`FieldScene`] through [`scene_view`] into `out` (RGBA8,
+/// A [`FieldFrame`] as a view: the scene's meshes, the frame's preset
+/// resolved at its camera target, and one billboard per object.
+#[must_use]
+pub fn scene_view(field: &FieldFrame) -> SceneView<'_> {
+    SceneView {
+        meshes: &field.scene.meshes,
+        billboards: field
+            .objects
+            .iter()
+            .map(|object| BillboardView {
+                texture: &object.texture,
+                rect: object.rect,
+                world_pos: object.world_pos,
+                size_px: object.size_px,
+                mirrored: object.mirrored,
+            })
+            .collect(),
+        camera: Camera::from_preset(&preset_from_core(&field.camera), field.camera_target),
+    }
+}
+
+/// Renders a [`FieldFrame`] through [`scene_view`] into `out` (RGBA8,
 /// alpha = coverage) and `depth` (NDC depth, `+∞` where clear).
 ///
 /// # Panics
 /// Panics unless both buffers hold exactly 256×192 entries.
-pub fn render(field: &FieldScene, out: &mut [[u8; 4]], depth: &mut [f64]) {
+pub fn render(field: &FieldFrame, out: &mut [[u8; 4]], depth: &mut [f64]) {
     render_view(&scene_view(field), out, depth);
 }
 
@@ -543,6 +565,7 @@ mod tests {
                 rect: (0, 0, 32, 32),
                 world_pos: target,
                 size_px: (32, 32),
+                mirrored: false,
             }],
             camera: Camera::from_preset(&CameraPreset::INDOOR, target),
         };

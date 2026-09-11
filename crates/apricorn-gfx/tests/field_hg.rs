@@ -7,7 +7,11 @@
 //! map 64, tile (6, 6)) and the player texture is the one billboard, as
 //! `apricorn_gfx::field::scene_view` builds it.
 
-use apricorn_core::{assets::AssetStore, field::FieldScene, frame::LogicalFrame};
+use apricorn_core::{
+    assets::AssetStore,
+    field::FieldScene,
+    frame::{FieldFrame, LogicalFrame},
+};
 use apricorn_gfx::field::{self, Camera, CameraPreset};
 use sha1::{Digest, Sha1};
 use std::{path::Path, sync::Arc};
@@ -17,9 +21,15 @@ const ROM_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../hg_usa.nds");
 /// The engine-A screen hashes for the two player genders — the whole
 /// pipeline's pin: NSBMD decode, camera, rasterizer, billboard,
 /// compositor (BG0 at priority 1 over the backdrop).
+///
+/// Re-pinned when `FieldFrame::static_scene` took the live system's
+/// billboard anchor (`SPRITE_OFFSET`, 6.5 units toward the camera):
+/// the player's hair box moved from rows 72-78 to 77-83, which is the
+/// live bedroom frame's and the oracle frame 4816's (124,77,130,83)
+/// exactly; nothing else in the frame moved.
 const BEDROOM_GOLDEN: [&str; 2] = [
-    "b27b8d22edd73ee82c605bb9a6c02c2694d10f0c",
-    "9508cd6a7781956ab7985aba5ed7800cfacee4fc",
+    "5299d14f0c683d9b6e6cd7eff3387d746a120f42",
+    "2b9e8211ef53e2ec5cd7689f32cbc754b2d302d1",
 ];
 
 fn open_rom() -> Option<AssetStore> {
@@ -57,7 +67,7 @@ fn bedroom_golden_through_bg0() {
     for gender in 0..2u8 {
         let scene = FieldScene::bedroom(&store, gender).unwrap();
         let mut frame = LogicalFrame::default();
-        frame.main.field = Some(Arc::new(scene));
+        frame.main.field = Some(FieldFrame::static_scene(Arc::new(scene)));
         frame.main.bgs[0].enabled = true;
         frame.main.bgs[0].priority = 1;
         let [main, _] = apricorn_gfx::render(&frame, &store);
@@ -85,9 +95,11 @@ fn bedroom_field_plane_is_covered_and_the_player_stands_at_the_centre() {
         (32, 32),
         "the player NSBTX frame is the mmdl_m32x32 quad's size"
     );
+    let position = scene.position;
+    let view = FieldFrame::static_scene(Arc::new(scene));
     let mut out = vec![[0u8; 4]; 256 * 192];
     let mut depth = vec![0.0; 256 * 192];
-    field::render(&scene, &mut out, &mut depth);
+    field::render(&view, &mut out, &mut depth);
     // The room fills most of the plane (≈28.7k of 49k pixels); the
     // rest — above the back wall, beside the side walls — is clear.
     let covered = out.iter().filter(|p| p[3] != 0).count();
@@ -103,15 +115,15 @@ fn bedroom_field_plane_is_covered_and_the_player_stands_at_the_centre() {
         depth[body] < depth[feet + 256 * 2],
         "the sprite beats the floor"
     );
-    let view = field::scene_view(&scene);
-    let centre = view
+    let scene_view = field::scene_view(&view);
+    let centre = scene_view
         .camera
-        .project(field::tile_position(scene.position))
+        .project(field::tile_position(position))
         .unwrap();
     assert!((centre[0] - 128.0).abs() < 1e-9 && (centre[1] - 96.0).abs() < 1e-9);
     // With BG0 disabled the compositor shows the backdrop instead.
     let mut frame = LogicalFrame::default();
-    frame.main.field = Some(Arc::new(scene));
+    frame.main.field = Some(view);
     frame.main.backdrop = 0x7C00; // pure blue in BGR555
     let [main, _] = apricorn_gfx::render(&frame, &store);
     assert_eq!(main.pixel(128, 96), [0, 0, 255, 255]);
@@ -127,7 +139,8 @@ fn outdoor_preset_projects_the_bedroom_too() {
     };
     let scene = FieldScene::bedroom(&store, 1).unwrap();
     let target = field::tile_position(scene.position);
-    let mut view = field::scene_view(&scene);
+    let frame_view = FieldFrame::static_scene(Arc::new(scene));
+    let mut view = field::scene_view(&frame_view);
     view.camera = Camera::from_preset(&CameraPreset::OUTDOOR, target);
     let mut out = vec![[0u8; 4]; 256 * 192];
     let mut depth = vec![0.0; 256 * 192];

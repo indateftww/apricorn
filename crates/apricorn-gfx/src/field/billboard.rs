@@ -54,6 +54,9 @@ pub struct BillboardView<'a> {
     /// `mmdl_m32x32` — which the field cameras scale ≈1:1 to pixels
     /// at the target depth.
     pub size_px: (u16, u16),
+    /// Show the rectangle mirrored left-to-right (the `u` texel
+    /// coordinates swapped between the quad's left and right edges).
+    pub mirrored: bool,
 }
 
 impl BillboardView<'_> {
@@ -72,12 +75,14 @@ impl BillboardView<'_> {
         );
         // NNSi_G3dFuncSbc_BB: the local axes become the camera's, the
         // translation stays — so the quad lives in camera space at the
-        // anchor's depth.
+        // anchor's depth. A mirrored view swaps the left and right
+        // texel columns.
+        let (u_left, u_right) = if self.mirrored { (u + w, u) } else { (u, u + w) };
         let corners = [
-            ([anchor[0] - half_w, anchor[1], anchor[2]], [u, v + rh]),
-            ([anchor[0] + half_w, anchor[1], anchor[2]], [u + w, v + rh]),
-            ([anchor[0] + half_w, anchor[1] + h, anchor[2]], [u + w, v]),
-            ([anchor[0] - half_w, anchor[1] + h, anchor[2]], [u, v]),
+            ([anchor[0] - half_w, anchor[1], anchor[2]], [u_left, v + rh]),
+            ([anchor[0] + half_w, anchor[1], anchor[2]], [u_right, v + rh]),
+            ([anchor[0] + half_w, anchor[1] + h, anchor[2]], [u_right, v]),
+            ([anchor[0] - half_w, anchor[1] + h, anchor[2]], [u_left, v]),
         ];
         let mut out = [Projected::default(); 4];
         for (slot, (point, uv)) in out.iter_mut().zip(corners) {

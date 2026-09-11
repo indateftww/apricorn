@@ -17,6 +17,7 @@
 
 pub mod area;
 pub mod events;
+pub mod height;
 pub mod land;
 pub mod lighting;
 pub mod map_header;
@@ -27,6 +28,7 @@ pub mod map_object;
 pub mod model;
 pub mod ov01;
 pub mod script_header;
+pub mod system;
 pub mod terrain;
 pub mod time_state;
 
@@ -39,7 +41,7 @@ use crate::{
 };
 use area::AreaData;
 use events::MapEvents;
-use land::{ATTRIBUTE_COUNT, LandData, PropPlacement};
+use land::{ATTRIBUTE_COUNT, Bdhc, LandData, PropPlacement};
 use map_header::{MapHeader, MapHeaders};
 use matrix::{MapMatrix, NO_LAND};
 use model::{Mesh, Placement, Texture};
@@ -126,6 +128,9 @@ pub struct LandCell {
     pub meshes: Vec<Mesh>,
     /// Terrain attributes, index `(x % 32) + (z % 32) * 32`.
     pub attrs: [u16; ATTRIBUTE_COUNT],
+    /// The cell's BDHC height data, which `field::height` solves for
+    /// the map objects' elevation.
+    pub bdhc: Bdhc,
 }
 
 /// One placed prop, transformed as `ov01_021F3A3C`
@@ -385,6 +390,7 @@ impl FieldScene {
                     origin,
                     meshes,
                     attrs: land.attributes,
+                    bdhc: land.bdhc,
                 });
             }
         }

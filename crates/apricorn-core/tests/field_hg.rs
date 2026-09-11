@@ -202,14 +202,26 @@ fn land_data_sections_and_attributes() {
     }
     assert_eq!(bedroom.bdhc.counts, [6, 2, 2, 3, 2, 4]);
 
-    // Members with an extra section: it sits between the attributes and
-    // the props (the BMD0 magic lands at 0x14 + attr + extra + props).
+    // Members with an extra section: it sits between the header and the
+    // attributes (the BMD0 magic lands at 0x14 + extra + attr + props).
+    // New Bark Town's member 0 is the evidence for the order: read from
+    // 0x14 + extraSize, its four door tiles (0x8069) are the map's four
+    // warp events — (684,393), (695,396), (679,405), (690,407) in map
+    // 60's matrix, cell (21, 12) — and its last 44 words are the tree
+    // run the old order mistook for the extra section.
     let nb = LandData::load(&store, 0).unwrap();
     assert_eq!((nb.sizes.props, nb.sizes.extra), (816, 88));
     assert_eq!(nb.props.len(), 17);
     assert_eq!(nb.props[0].model_id, 21);
     assert_eq!(nb.props[0].translation, [-24 * FX32_ONE, 16 * FX32_ONE, -128 * FX32_ONE]);
-    assert!(nb.extra.chunks_exact(2).all(|w| w == [0x06, 0x80]));
+    let doors: Vec<(usize, usize)> = (0..32)
+        .flat_map(|z| (0..32).map(move |x| (x, z)))
+        .filter(|&(x, z)| nb.attribute(x, z) == Some(0x8069))
+        .map(|(x, z)| (672 + x, 384 + z))
+        .collect();
+    assert_eq!(doors, [(684, 393), (695, 396), (679, 405), (690, 407)]);
+    assert!(nb.attributes[1024 - 44..].iter().all(|&w| w == 0x8006));
+    assert_eq!(nb.extra.len(), 88);
 
     let mut props = 0;
     let mut with_extra = 0;

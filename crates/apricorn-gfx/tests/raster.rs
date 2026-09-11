@@ -1569,9 +1569,13 @@ mod field_compositing {
 
     /// A synthetic field: one red ground quad, `half` world units to
     /// each side of the player's tile (0, 0), `alpha` 0–31, and an
-    /// invisible (alpha 0) player texture so the shim's billboard draws
-    /// nothing.
-    fn field(half: i32, alpha: u8) -> Arc<FieldScene> {
+    /// invisible (alpha 0) player texture so the static view's one
+    /// billboard draws nothing.
+    fn field(half: i32, alpha: u8) -> apricorn_core::frame::FieldFrame {
+        apricorn_core::frame::FieldFrame::static_scene(field_scene(half, alpha))
+    }
+
+    fn field_scene(half: i32, alpha: u8) -> Arc<FieldScene> {
         let centre = tile_position([0, 0]);
         let h = half * 4096;
         let corner = |dx: i32, dz: i32| Vertex {

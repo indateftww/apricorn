@@ -6,7 +6,9 @@ intro, title, save check, main menu and Oak's speech. Oak launches
 scene's printers and animation counters stop. Its last frame survives the
 handoff, then Oak restores its graphics and asks for name confirmation.
 The confirmed `PlayerIdentity` is written into the initialized save blocks
-in `AfterOakSpeech`. `Bedroom` displays the room and chosen character.
+in `AfterOakSpeech`. `Field` runs the live field system from the bedroom:
+movement, the camera, warps to house 1F and New Bark Town
+(`docs/field-system.md`).
 
 The desktop already used `Game` before this landing. It now also maps a
 left mouse click onto bottom-LCD stylus coordinates, including integer
@@ -156,7 +158,7 @@ scheduler equivalence test. The interpreter fixes it exposed have focused
 instruction regressions (multiply decoding, long multiply, register-offset
 loads/stores and Thumb-to-ARM BLX).
 
-## Bedroom landing
+## Field entry
 
 The static field loader follows map 64's matrix 72 to land member 217 in
 `a/0/6/5`. Area 25 supplies map and prop texture IDs. Geometry comes from
@@ -167,11 +169,13 @@ textures come from `a/0/4/4` and `a/0/7/0`. Player images come from members
 The NSBMD subset handles the room's identity nodes, material bindings and
 packed GX triangle/quad streams. The CPU renderer uses the type-4 field
 camera parameters and a depth buffer. It is a static rendering subset:
-lighting, hardware raster precision, field entry animation, movement,
-scripts, collision and the lower-screen field UI still belong to the
-field-engine work. The bottom LCD stays black. `Bedroom` deliberately
-holds the room; it does not yet respond to movement keys. Continue also
-remains a terminal placeholder.
+lighting and hardware raster precision still belong to the field-engine
+work. The bottom LCD stays black. `Field` ticks
+`field::system::FieldSystem` from the bedroom: the new-game fade-in,
+movement with collision, the camera following, the stairs to house 1F
+and the front door into New Bark Town (`docs/field-system.md`). Field
+scripts and the lower-screen field UI are the next workstreams.
+Continue remains a terminal placeholder.
 
 `gfx/tests/bedroom_hg.rs` renders both genders and can emit review PNGs via
 `APRICORN_RENDER_OUT`. Room textures exposed an older BTX bit-depth error:

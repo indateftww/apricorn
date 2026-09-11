@@ -17,7 +17,7 @@
 //! | [`NewGameInit`] | `ov36_App_MainMenu_SelectOption_NewGame` | Oak's speech — `overlay_36.c:112` |
 //! | [`OakSpeech`] | `gApplication_OakSpeech` | post-Oak init — `oaks_speech.c:650` |
 //! | [`AfterOakSpeech`] | `ov36_App_InitGameState_AfterOakSpeech` | the field — `overlay_36.c:138` |
-//! | [`Bedroom`] | `gApplication_NewGameFieldsys` | terminal this phase (Phase 5 overworld) |
+//! | [`Field`] | `gApplication_NewGameFieldsys` | the live field ([`FieldSystem`]); terminal this phase |
 //! | [`Continue`] | the menu's app leaves | terminal this phase |
 //!
 //! [`IntroMovie`]: GameState::IntroMovie
@@ -27,7 +27,7 @@
 //! [`NewGameInit`]: GameState::NewGameInit
 //! [`OakSpeech`]: GameState::OakSpeech
 //! [`AfterOakSpeech`]: GameState::AfterOakSpeech
-//! [`Bedroom`]: GameState::Bedroom
+//! [`Field`]: GameState::Field
 //! [`Continue`]: GameState::Continue
 //!
 //! **Boot order** is `NitroMain`'s: probe the card backup
@@ -54,8 +54,10 @@
 //! post-Oak trainer ID, avatar, Safari areas, mail and Pokewalker seeds.
 //! Their scene boundaries are represented by one-tick [`InitPass`] values;
 //! full original-overlay scheduler timing still needs differential coverage.
-//! The bedroom holds ROM geometry and the chosen player texture; movement
-//! and field scripts belong to Phase 5.
+//! The field state runs [`FieldSystem`] — `CallFieldTask_NewGame`'s entry
+//! into the bedroom, then free movement, warps and the maps they lead
+//! to (`docs/field-system.md`); NPCs, scripts and menus are the next
+//! workstreams.
 //!
 //! The title screen's CLEARSAVE and MIC_TEST exits
 //! (`title_screen.c:250-259` — a key combo on the title screen, the
@@ -68,6 +70,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use crate::assets::AssetStore;
+use crate::field::system::FieldSystem;
 use crate::frame::LogicalFrame;
 use crate::input::Input;
 use crate::rng::{Lcrng, Mt19937};
@@ -120,10 +123,10 @@ pub enum GameState {
     /// The post-Oak `ov36` overlay — the rest of game-state init,
     /// then the field.
     AfterOakSpeech,
-    /// The new-game field entry: the player's bedroom. Phase 4's end
-    /// state — the overworld is Phase 5, so the machine holds here
-    /// (a static ROM-backed room).
-    Bedroom,
+    /// The field — `gApplication_NewGameFieldsys`: the new game's entry
+    /// into the bedroom and everything the live [`FieldSystem`] runs
+    /// from there (movement, warps). The chain ends here this phase.
+    Field,
     /// The menu's CONTINUE and app leaves (`main_menu.c:1488-1515` —
     /// the Pokewalker, the mystery-gift and migrate apps, the Wii
     /// connect, the WFC setup, the Wii message settings): overlays
@@ -199,15 +202,17 @@ enum Scene {
     Oak(OakSpeech),
     /// New-game and post-Oak initialization boundaries.
     Init(InitPass),
-    /// Static bedroom geometry and the confirmed player character.
-    Bedroom(LogicalFrame),
+    /// The live field: the bedroom entry and everything after it.
+    Field(FieldSystem),
     /// The menu's CONTINUE and app leaves, this phase's other
     /// terminal state: a cleared frame, forever.
     Continue(LogicalFrame),
 }
 
 impl Scene {
-    fn tick(&mut self, frame: crate::Frame, input: Input) {
+    /// Ticks the scene; the field reads the asset store for map loads
+    /// at warps, so it takes the store the others captured at load.
+    fn tick(&mut self, frame: crate::Frame, input: Input, store: &Mutex<AssetStore>) {
         match self {
             Scene::Intro(app) => app.tick(frame, input),
             Scene::Title(app) => app.tick(frame, input),
@@ -215,7 +220,10 @@ impl Scene {
             Scene::MainMenu(app) => app.tick(frame, input),
             Scene::Oak(app) => app.tick(frame, input),
             Scene::Init(stub) => stub.tick(frame, input),
-            Scene::Bedroom(_) | Scene::Continue(_) => {}
+            Scene::Field(field) => {
+                field.tick(input, &store.lock().expect("asset store"));
+            }
+            Scene::Continue(_) => {}
         }
     }
 
@@ -227,7 +235,8 @@ impl Scene {
             Scene::MainMenu(app) => app.frame(),
             Scene::Oak(app) => app.frame(),
             Scene::Init(stub) => stub.frame(),
-            Scene::Bedroom(frame) | Scene::Continue(frame) => frame,
+            Scene::Field(field) => field.frame(),
+            Scene::Continue(frame) => frame,
         }
     }
 
@@ -239,7 +248,7 @@ impl Scene {
             Scene::MainMenu(app) => app.next(),
             Scene::Oak(app) => app.next(),
             Scene::Init(stub) => stub.next(),
-            Scene::Bedroom(_) | Scene::Continue(_) => ChainNext::Stay,
+            Scene::Field(_) | Scene::Continue(_) => ChainNext::Stay,
         }
     }
 }
@@ -441,6 +450,16 @@ impl Game {
         self.menu_exit
     }
 
+    /// The live field system, while the machine is in
+    /// [`GameState::Field`].
+    #[must_use]
+    pub fn field(&self) -> Option<&FieldSystem> {
+        match &self.scene {
+            Scene::Field(field) => Some(field),
+            _ => None,
+        }
+    }
+
     /// The current scene's logical frame (the running overlay's
     /// frame; on the tick after a transition, the *new* scene's
     /// cleared state — [`Self::tick`]'s return carried the finishing
@@ -516,7 +535,7 @@ impl Game {
                 _ => {}
             }
         }
-        self.scene.tick(frame, input);
+        self.scene.tick(frame, input, &self.store);
         if self.scene.next() == ChainNext::Advance {
             // Retain the finishing frame, then swap in the next
             // state's scene, constructed fresh.
@@ -618,8 +637,8 @@ impl Game {
             // oaks_speech.c:650.
             GameState::OakSpeech => GameState::AfterOakSpeech,
             // overlay_36.c:138 — gApplication_NewGameFieldsys.
-            GameState::AfterOakSpeech => GameState::Bedroom,
-            GameState::Bedroom | GameState::Continue => {
+            GameState::AfterOakSpeech => GameState::Field,
+            GameState::Field | GameState::Continue => {
                 unreachable!("the terminal states never advance")
             }
         }
@@ -652,17 +671,14 @@ impl Game {
                 frame: LogicalFrame::default(),
                 ticked: false,
             }),
-            GameState::Bedroom => {
-                let mut frame = LogicalFrame::default();
+            GameState::Field => {
+                // CallFieldTask_NewGame: the field at sLocation_PlayerRoom
+                // with the confirmed gender's sprite.
                 let gender = self.player.as_ref().expect("Oak confirmed a player").gender;
-                frame.main.field = Some(Arc::new(
-                    crate::field::FieldScene::bedroom(
-                        &self.store.lock().expect("asset store"),
-                        gender,
-                    )
-                    .expect("the pinned ROM's bedroom assets load"),
-                ));
-                Scene::Bedroom(frame)
+                Scene::Field(
+                    FieldSystem::new_game(&self.store.lock().expect("asset store"), gender)
+                        .expect("the pinned ROM's bedroom assets load"),
+                )
             }
             GameState::Continue => Scene::Continue(LogicalFrame::default()),
         }

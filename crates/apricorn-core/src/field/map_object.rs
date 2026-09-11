@@ -74,6 +74,16 @@ pub trait Collision {
     fn surfable(&self, _x: i32, _z: i32) -> bool {
         false
     }
+
+    /// `sub_02061248` → `sub_02054940`: the ground height under world
+    /// position `(x, z)` (fx32) for an object at height `y` — the
+    /// resident cells' BDHC plates (`field::height`) — or `None` where
+    /// no plate covers it, the lookup's "not found" that leaves the
+    /// object's height stale. Defaults to `None`: a terrain without
+    /// heights keeps every object at its creation elevation.
+    fn height_at(&self, _x: i32, _y: i32, _z: i32) -> Option<i32> {
+        None
+    }
 }
 
 /// A map with no tiles at all: every lookup fails (out-of-map
@@ -998,11 +1008,12 @@ impl MapObject {
         }
     }
 
-    /// `sub_02061070`: refresh the elevation from the BDHC height map.
-    /// No height map is loaded here (BDHC is deferred), so this ports
-    /// the flag protocol only: `IGNORE_HEIGHTS` clears `HEIGHT_STALE`;
-    /// otherwise the lookup counts as failed and `HEIGHT_STALE` is set
-    /// (`asm/unk_0205FD20.s:2445`). Returns pret's result (found).
+    /// `sub_02061070` without a height source — the flag protocol
+    /// only: `IGNORE_HEIGHTS` clears `HEIGHT_STALE`; otherwise the
+    /// lookup is left pending with `HEIGHT_STALE` set, which
+    /// [`Self::tick`] resolves against its terrain in the same tick
+    /// (the step machine does not carry the terrain). Returns pret's
+    /// result (found): false, nothing was looked up.
     pub fn update_height(&mut self) -> bool {
         if self.test_flags(flag::IGNORE_HEIGHTS) {
             self.clear_flags(flag::HEIGHT_STALE);
@@ -1010,6 +1021,36 @@ impl MapObject {
             self.set_flags(flag::HEIGHT_STALE);
         }
         false
+    }
+
+    /// `sub_02061070` (`asm/unk_0205FD20.s:2445`): refresh the
+    /// elevation from the terrain's height map. `IGNORE_HEIGHTS` clears
+    /// `HEIGHT_STALE` and does nothing else; otherwise the ground height
+    /// under the position vector (`sub_02061248`) becomes the vector's
+    /// y, the tile y is latched as the previous one and becomes the
+    /// height in 8-unit steps (`(y >> 3) / 4096`, truncating toward
+    /// zero), clearing `HEIGHT_STALE`; a miss sets it. Returns whether
+    /// a height was found.
+    pub fn update_height_from(&mut self, terrain: &dyn Collision) -> bool {
+        if self.test_flags(flag::IGNORE_HEIGHTS) {
+            self.clear_flags(flag::HEIGHT_STALE);
+            return false;
+        }
+        let p = self.position;
+        match terrain.height_at(p.x, p.y, p.z) {
+            Some(y) => {
+                self.position.y = y;
+                self.previous[1] = self.current[1];
+                let eighths = y >> 3;
+                self.current[1] = (eighths + if eighths < 0 { 0xFFF } else { 0 }) >> 12;
+                self.clear_flags(flag::HEIGHT_STALE);
+                true
+            }
+            None => {
+                self.set_flags(flag::HEIGHT_STALE);
+                false
+            }
+        }
     }
 
     /// `sub_02061108` (`asm/unk_0205FD20.s:2516`): latch the behaviours
@@ -1214,12 +1255,15 @@ impl MapObject {
     /// `sub_0205FD30` (`asm/unk_0205FD20.s:28`), the object's per-frame
     /// SysTask body, less the autonomous-movement and effect hooks:
     ///
-    /// 1. `sub_0205FE0C`: a stale height is re-fetched.
+    /// 1. `sub_0205FE0C`: a stale height is re-fetched from the terrain.
     /// 2. `sub_0205FE24`: a stale standing-tile behaviour is refreshed;
     ///    becoming valid raises `START_MOVEMENT`.
     /// 3. `sub_0205FE48`: a pending `START_MOVEMENT` refreshes the
     ///    behaviours (`sub_0205FEDC`) and is consumed.
-    /// 4. The held movement runs (`sub_02062400`) if one is loaded.
+    /// 4. The held movement runs (`sub_02062400`) if one is loaded; the
+    ///    height its walk step refreshes (`sub_02061070`) is resolved
+    ///    against the terrain right after, the step machine having
+    ///    only marked it stale.
     /// 5. `sub_0205FE6C`: `START_MOVEMENT` raised by the step refreshes
     ///    the behaviours (`sub_0205FF6C`) and is consumed.
     /// 6. `sub_0205FEA4`: `END_MOVEMENT` latches the previous-tile
@@ -1230,7 +1274,7 @@ impl MapObject {
     pub fn tick(&mut self, terrain: &dyn Collision) -> TickReport {
         let mut report = TickReport::default();
         if self.test_flags(flag::HEIGHT_STALE) {
-            self.update_height();
+            self.update_height_from(terrain);
         }
         if self.test_flags(flag::BEHAVIOR_STALE) && self.refresh_behaviors(terrain) {
             self.set_flags(flag::START_MOVEMENT);
@@ -1242,6 +1286,9 @@ impl MapObject {
         self.clear_flags(flag::START_MOVEMENT | flag::UNK16);
         if self.test_flags(flag::HELD_MOVEMENT) {
             report.unimplemented = self.run_held_movement();
+            if self.test_flags(flag::HEIGHT_STALE) {
+                self.update_height_from(terrain);
+            }
         }
         if self.test_flags(flag::UNK16) {
             self.refresh_behaviors(terrain);
