@@ -443,6 +443,15 @@ fn route_29_transition_runs_as_a_map_load_script() {
 
 /// Runs a scene script frame by frame with A held, returning the
 /// frame count.
+///
+/// The counts the callers pin are the mock's, not retail's: the
+/// recording host answers every wait on its first poll and reports A
+/// newly pressed every frame, so a frame is one yield — a command that
+/// returns `TRUE`, a native wait's satisfied poll (bytecode resumes the
+/// frame after), a `Wait n` tick, a `CallStd` handshake step. They are
+/// derived by hand from the retail script sources in the comments and
+/// pinned exactly so a change in any command's yield or wait behaviour
+/// shows up.
 fn run_scene(host: &mut RecordingHost, env: &mut ScriptEnvironment, max: usize) -> usize {
     host.keys = Keys(key::A);
     for frame in 1..=max {
@@ -466,7 +475,11 @@ fn bedroom_pc_script_runs_frame_by_frame() {
     let mut env = ScriptEnvironment::new();
     env.setup(1, Some(0), dir::NORTH);
     let frames = run_scene(&mut host, &mut env, 100);
-    assert!((5..=12).contains(&frames), "{frames} frames");
+    // 1 ScrCmd_609 | 2 LockAll | 3 PlaySE, BufferPlayersName, NPCMsg |
+    // 4 print poll | 5 CloseMsg, ScrCmd_377 = 0, Compare, GoToIfEq,
+    // NPCMsg | 6 print poll | 7 WaitButton | 8 A poll | 9 CloseMsg,
+    // ReleaseAll | 10 End.
+    assert_eq!(frames, 10);
     assert_eq!(host.prints().len(), 2);
     let name = host.player_name.units().to_vec();
     assert!(
@@ -498,7 +511,13 @@ fn bedroom_pc_script_runs_frame_by_frame() {
     host.queries.insert(FieldQuery::MailboxCount, 1);
     let mut env = ScriptEnvironment::new();
     env.setup(1, Some(0), dir::NORTH);
-    run_scene(&mut host, &mut env, 100);
+    let frames = run_scene(&mut host, &mut env, 100);
+    // 1-4 as above | 5 CloseMsg, ScrCmd_377 = 1, Compare, GoToIfEq not
+    // taken, FadeScreen, WaitFade | 6 fade poll | 7 ScrCmd_376 launches
+    // the mail app | 8 app poll | 9 RestoreOverworld pushes its child
+    // task | 10 the child returns and, in the same frame, FadeScreen,
+    // WaitFade | 11 fade poll | 12 ReleaseAll | 13 End.
+    assert_eq!(frames, 13);
     assert_eq!(host.prints().len(), 1);
     assert!(host.events.contains(&HostEvent::Launch(AppRequest::Mail)));
     let fades = host
@@ -513,7 +532,10 @@ fn bedroom_pc_script_runs_frame_by_frame() {
     let mut host = rom_host(&store, map_banks(3));
     let mut env = ScriptEnvironment::new();
     env.setup(2, None, dir::NORTH);
-    run_scene(&mut host, &mut env, 100);
+    let frames = run_scene(&mut host, &mut env, 100);
+    // 1 PlaySE, LockAll | 2 NPCMsg | 3 print poll | 4 WaitButton |
+    // 5 A poll | 6 CloseMsg, ReleaseAll | 7 End.
+    assert_eq!(frames, 7);
     assert_eq!(host.prints().len(), 1);
 }
 
@@ -530,8 +552,21 @@ fn mom_scene_runs_through_two_call_stds() {
     let mut env = ScriptEnvironment::new();
     env.setup(script, None, dir::SOUTH);
     let frames = run_scene(&mut host, &mut env, 400);
-    // Two Waits (30 + 15 frames) plus the yields around them.
-    assert!((50..=120).contains(&frames), "{frames} frames");
+    // 1 ScrCmd_609 | 2 LockAll | 3 ApplyMovement x2, WaitMovement |
+    // 4 movement poll | 5 CallStd std_play_mom_music: the callee runs
+    // StopBGM, TempBGM, RestartCurrentScript, End in slot 1 this frame |
+    // 6 the caller's WaitStd holds | 7 Wait 30 | 8-37 thirty
+    // RunPauseTimer ticks | 38 ApplyMovement, WaitMovement | 39 poll |
+    // 40 BufferPlayersName, GenderMsgBox | 41 print poll | 42 SetFlag,
+    // PlayFanfare, WaitFanfare | 43 poll | 44 NPCMsg | 45 poll | 46-47,
+    // 48-49, 50-51, 52-53, 54-55, 56-57 three more fanfare/message
+    // pairs | 58 CloseMsg, Wait 15 | 59-73 fifteen ticks |
+    // 74 ApplyMovement, WaitMovement | 75 poll | 76 CallStd
+    // std_fade_end_mom_music: the callee's FadeOutBGM installs its wait |
+    // 77 caller waits, callee's fade poll holds | 78 caller waits,
+    // callee runs StopBGM, ResetBGM, RestartCurrentScript, End |
+    // 79 the caller's WaitStd holds | 80 SetVar, ReleaseAll | 81 End.
+    assert_eq!(frames, 81);
     for flag in [
         FLAG_GOT_BAG,
         FLAG_GOT_TRAINER_CARD,
