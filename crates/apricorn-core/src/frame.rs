@@ -547,13 +547,109 @@ pub struct Sprite {
     pub palette_bank: u8,
 }
 
+/// One map-object billboard to draw this tick — the `mmodel` quad of
+/// `a/0/8/1` with one texel rectangle of its NSBTX shown
+/// (`docs/gfx.md`, "The billboard shear and map objects"). The field
+/// system builds one per visible object every tick; the rasterizer
+/// places the quad camera-facing at `world_pos` (the object's
+/// position vector — its feet) and `size_px` world units wide and
+/// tall, which the field presets scale ≈1:1 to pixels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectView {
+    /// The decoded frame strip (or single image): RGBA8, shared so a
+    /// frame clone never copies pixels.
+    pub texture: std::sync::Arc<crate::field::model::Texture>,
+    /// The texel rectangle `(u, v, width, height)` shown — the walk
+    /// frame within the strip.
+    pub rect: (u16, u16, u16, u16),
+    /// The anchor in fx32 world coordinates: the bottom centre of the
+    /// quad.
+    pub world_pos: [i32; 3],
+    /// The quad's width and height in world units (32 × 32 for the
+    /// standard `mmdl_m32x32` class).
+    pub size_px: (u16, u16),
+    /// Draw the rectangle mirrored left-to-right — the classes that
+    /// store one side view and flip it for the other facing.
+    pub mirrored: bool,
+}
+
+/// The field (3D) layer as one tick sees it — the plain-data view the
+/// field system publishes and the rasterizer draws as engine A's BG0
+/// (`docs/field-system.md`): the loaded map, the camera preset and its
+/// target, and the map-object billboards.
+///
+/// The scene is shared by `Arc` (a map load is the expensive part and
+/// happens only at warps); everything per-tick — the camera target
+/// (`FieldCamera`'s tracked position vector) and the objects' frames
+/// and positions — is copied into the frame, so a frame compares with
+/// `==` and replays without the system that produced it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldFrame {
+    /// The loaded map: cells, props, terrain, events.
+    pub scene: std::sync::Arc<crate::field::FieldScene>,
+    /// The camera preset in force (`FieldCamera_Create`'s row; scripts
+    /// may replace it later).
+    pub camera: crate::field::ov01::CameraPreset,
+    /// The camera's look-at target in fx32 world units — the player's
+    /// position vector (`Camera_SetFixedTarget`), before the preset's
+    /// look-at offset.
+    pub camera_target: [i32; 3],
+    /// The visible map objects, in draw order.
+    pub objects: Vec<ObjectView>,
+}
+
+impl FieldFrame {
+    /// The static view of a loaded scene: the header's camera preset
+    /// targeting the player's tile, and the scene's south-facing player
+    /// image as the one object standing on that tile — what the
+    /// Phase 4 bedroom landing showed, placed as the live system places
+    /// a standing player: the tile centre lifted to the ground height
+    /// the cells' BDHC plates give (`field::height`, 0 where none
+    /// covers the tile) for the camera target, plus
+    /// [`SPRITE_OFFSET`](crate::field::system::SPRITE_OFFSET) for the
+    /// billboard's anchor.
+    #[must_use]
+    pub fn static_scene(scene: std::sync::Arc<crate::field::FieldScene>) -> Self {
+        use crate::field::height::{HeightMode, scene_height};
+        use crate::field::map_object::VecFx32;
+        use crate::field::system::SPRITE_OFFSET;
+        let [x, z] = scene.position;
+        let tile = VecFx32::from_tile(x, 0, z);
+        let y = scene_height(&scene.cells, HeightMode::Nearest, tile.x, 0, tile.z).unwrap_or(0);
+        let target = [tile.x, y, tile.z];
+        let world_pos = [
+            tile.x + SPRITE_OFFSET.x,
+            y + SPRITE_OFFSET.y,
+            tile.z + SPRITE_OFFSET.z,
+        ];
+        let player = std::sync::Arc::new(scene.player.clone());
+        let size = (
+            u16::try_from(player.width).unwrap_or(u16::MAX),
+            u16::try_from(player.height).unwrap_or(u16::MAX),
+        );
+        let camera = scene.camera;
+        Self {
+            scene,
+            camera,
+            camera_target: target,
+            objects: vec![ObjectView {
+                texture: player,
+                rect: (0, 0, size.0, size.1),
+                world_pos,
+                size_px: size,
+                mirrored: false,
+            }],
+        }
+    }
+}
+
 /// One 2D engine's state — four text BG layers over the blend and
 /// brightness units, the named char-block slots, the composed BG
 /// palette RAM, and the message windows printing into the layers.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct EngineFrame {
-    /// The static 3D field layer, when this engine displays a field map.
-    pub field: Option<std::sync::Arc<crate::field::FieldScene>>,
+    /// The 3D field layer, when this engine displays a field map.
+    pub field: Option<FieldFrame>,
     /// The engine's four BG layers, BG0 through BG3. Engine A's BG0
     /// doubles as the 3D core's framebuffer when bound to a model
     /// (`GX_BG0_AS_3D`) — Phase 3 renders it absent (transparent),

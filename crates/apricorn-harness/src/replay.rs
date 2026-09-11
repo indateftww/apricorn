@@ -18,12 +18,19 @@
 //! correct, so a diff against it is only as trustworthy as the care
 //! taken in updating it. The committed files carry hashes only — no
 //! game content (the ROM stays a local, gitignored dump).
+//!
+//! The same case replays on the engine ([`Case::run_engine`],
+//! `apricorn-replay --engine`): the real `apricorn-core` game under
+//! the case's script and regions, its trace compared against the
+//! oracle's `expected.trace` through the same comparator. The engine
+//! never defines correct — `--update` stays an oracle-only act.
 
 use std::path::{Path, PathBuf};
 
 use crate::HarnessError;
+use crate::engine::EngineRun;
 use crate::input::InputScript;
-use crate::oracle::{OracleRun, ProbeSpec};
+use crate::oracle::{OracleRun, ProbeSpec, ShotRequest};
 use crate::pins::{PinMode, PinTable};
 use crate::regions::RegionSet;
 use crate::trace::Trace;
@@ -86,12 +93,8 @@ impl Case {
         self.script.rtc.as_deref()
     }
 
-    /// Replays the case on the oracle and parses the trace it produces.
-    ///
-    /// # Errors
-    /// Propagates [`crate::oracle::OracleRun::run`]'s errors (binary
-    /// missing, nonzero exit, malformed trace).
-    pub fn run_oracle(&self, rom: &Path) -> Result<Trace, HarnessError> {
+    /// The case's oracle invocation on `rom`.
+    fn oracle_run<'a>(&'a self, rom: &'a Path) -> OracleRun<'a> {
         OracleRun {
             rom,
             regions: &self.regions,
@@ -101,7 +104,54 @@ impl Case {
             rtc: self.rtc(),
             producer: None,
         }
+    }
+
+    /// Replays the case on the oracle and parses the trace it produces.
+    ///
+    /// # Errors
+    /// Propagates [`crate::oracle::OracleRun::run`]'s errors (binary
+    /// missing, nonzero exit, malformed trace).
+    pub fn run_oracle(&self, rom: &Path) -> Result<Trace, HarnessError> {
+        self.oracle_run(rom).run()
+    }
+
+    /// [`run_oracle`](Self::run_oracle), also writing the screenshots
+    /// `shots` asks for — the same trace, plus PNGs of both LCDs at the
+    /// listed frames for visual review against engine renders.
+    ///
+    /// # Errors
+    /// Propagates [`crate::oracle::OracleRun::run_with_shots`]'s errors.
+    pub fn run_oracle_with_shots(
+        &self,
+        rom: &Path,
+        shots: &ShotRequest,
+    ) -> Result<Trace, HarnessError> {
+        self.oracle_run(rom).run_with_shots(shots)
+    }
+
+    /// Replays the case on the engine — the real `apricorn-core` game
+    /// through [`EngineRun`], with a blank card — and returns its
+    /// trace, header gates computed as the oracle computes them so
+    /// the pair compares.
+    ///
+    /// Probes (`probes.conf`) are an oracle/arm-runner notion (pinned
+    /// addresses to call); a case that carries them still replays its
+    /// frames here, without `C` records.
+    ///
+    /// # Errors
+    /// Propagates [`EngineRun::run`]'s errors: a region the engine
+    /// cannot serve (named), an unparsable `rtc`, an unreadable ROM.
+    pub fn run_engine(&self, rom: &Path) -> Result<Trace, HarnessError> {
+        EngineRun {
+            rom,
+            regions: &self.regions,
+            script: &self.script,
+            save: None,
+            frames: None,
+            producer: None,
+        }
         .run()
+        .map(|output| output.trace)
     }
 
     /// The case's committed expected trace, if present.

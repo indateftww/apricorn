@@ -6,7 +6,9 @@ intro, title, save check, main menu and Oak's speech. Oak launches
 scene's printers and animation counters stop. Its last frame survives the
 handoff, then Oak restores its graphics and asks for name confirmation.
 The confirmed `PlayerIdentity` is written into the initialized save blocks
-in `AfterOakSpeech`. `Bedroom` displays the room and chosen character.
+in `AfterOakSpeech`. `Field` runs the live field system from the bedroom:
+movement, the camera, warps to house 1F and New Bark Town
+(`docs/field-system.md`).
 
 The desktop already used `Game` before this landing. It now also maps a
 left mouse click onto bottom-LCD stylus coordinates, including integer
@@ -75,6 +77,37 @@ explicitly black, and its BG0 draws only the prompt near the bottom.
 Local review renders cover all three pages and a filled name after a
 complete page cycle; the user confirmed the corrected rendering.
 
+Two suspected text-box defects were checked against the retail ROM on
+the oracle (2026-09-11) and turned out to be retail behavior, pixel for
+pixel modulo melonDS's 5→8-bit color expansion:
+
+- The "two stacked rounded boxes" at the right end of Oak's gender and
+  name dialogs and of the naming prompt are the `{YESNO 0}` screen-focus
+  icon (`RenderScreenFocusIndicatorTile`, `text.c:296`: frame 0 of
+  `graphic_font` member 6 blitted at `(width-3)·8`), which the retail ROM
+  draws at the same place (oracle frames 3576–3640, 3876, 4110). They are
+  not the page-wait arrow. The arrow (`TextPrinter_DrawDownArrow`,
+  `render_text.c:395`) is a light-grey triangle over the frame's `+10/+11`
+  border columns, and the engine's three poses match the retail ROM's
+  held paragraph wait (a scratch oracle case with the A pulses removed,
+  frames 2124–2200) tile for tile, nine frames per pose in the
+  `{0, 1, 2, 1}` cycle. `scripts/engine-new-game.apin` pulses A on
+  alternate ticks, so every engine paragraph wait is drawn and cleared
+  within one tick and the arrow never reaches its PNGs — a script
+  artifact, not a renderer defect; the corpus retail script pulses with
+  period 8.
+- The 16-pixel dark band before the box's right border is the dialogue
+  frame's own art: `sub_0200E6B4` (`render_window.s`) writes three border
+  columns right of the interior (`+3/+4/+5`, `+9/+10/+11`, `+15/+16/+17`)
+  and two left of it; the interior fill spans exactly `width` tiles. The
+  retail frames 1959/2081/3580/3638/3876 show the same band.
+
+`gfx/tests/raster.rs::dialogue_fill_border_arrow_and_focus_extents_follow_pret`
+pins that geometry ROM-free; `gfx/tests/oak_hg.rs` pins the three arrow
+poses' block hashes and their nine-frame timing plus the gender question's
+top LCD, and `gfx/tests/naming_hg.rs` the prompt's top LCD, all pinned
+after the retail comparison.
+
 ## Validation and remaining parity work
 
 `crates/apricorn-core/tests/naming_hg.rs` checks layout loading, cursor
@@ -125,7 +158,7 @@ scheduler equivalence test. The interpreter fixes it exposed have focused
 instruction regressions (multiply decoding, long multiply, register-offset
 loads/stores and Thumb-to-ARM BLX).
 
-## Bedroom landing
+## Field entry
 
 The static field loader follows map 64's matrix 72 to land member 217 in
 `a/0/6/5`. Area 25 supplies map and prop texture IDs. Geometry comes from
@@ -136,11 +169,13 @@ textures come from `a/0/4/4` and `a/0/7/0`. Player images come from members
 The NSBMD subset handles the room's identity nodes, material bindings and
 packed GX triangle/quad streams. The CPU renderer uses the type-4 field
 camera parameters and a depth buffer. It is a static rendering subset:
-lighting, hardware raster precision, field entry animation, movement,
-scripts, collision and the lower-screen field UI still belong to the
-field-engine work. The bottom LCD stays black. `Bedroom` deliberately
-holds the room; it does not yet respond to movement keys. Continue also
-remains a terminal placeholder.
+lighting and hardware raster precision still belong to the field-engine
+work. The bottom LCD stays black. `Field` ticks
+`field::system::FieldSystem` from the bedroom: the new-game fade-in,
+movement with collision, the camera following, the stairs to house 1F
+and the front door into New Bark Town (`docs/field-system.md`). Field
+scripts and the lower-screen field UI are the next workstreams.
+Continue remains a terminal placeholder.
 
 `gfx/tests/bedroom_hg.rs` renders both genders and can emit review PNGs via
 `APRICORN_RENDER_OUT`. Room textures exposed an older BTX bit-depth error:

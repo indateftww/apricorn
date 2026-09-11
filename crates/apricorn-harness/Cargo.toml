@@ -8,11 +8,17 @@ repository.workspace = true
 
 [dependencies]
 apricorn-core.workspace = true
+apricorn-gfx.workspace = true
+png = "0.17"
 sha1 = "0.10"
 
 [[bin]]
 name = "apricorn-diff"
 path = "src/bin/apricorn-diff.rs"
+
+[[bin]]
+name = "apricorn-run"
+path = "src/bin/apricorn-run.rs"
 
 [[bin]]
 name = "arm-runner"

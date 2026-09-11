@@ -187,6 +187,24 @@ impl Mt19937 {
         mt
     }
 
+    /// `sMTRNG_State` as the ROM lays it out: the 624 words in array
+    /// order, nothing else (the cursor is a separate `.data` static,
+    /// [`Self::cycles`]). The harness's engine-side trace producer
+    /// serializes these as little-endian `u32`s — the 2496 bytes the
+    /// oracle hashes at the `sMTRNG_State` pin.
+    #[must_use]
+    pub fn state_words(&self) -> &[u32; 624] {
+        &self.state
+    }
+
+    /// `sMTRNG_Cycles` — the draw cursor (`int`, `.data`, initializer
+    /// 625): 625 on a fresh image, 624 after `SetMTRNGSeed`, otherwise
+    /// the index of the next word to serve.
+    #[must_use]
+    pub fn cycles(&self) -> i32 {
+        self.cycles
+    }
+
     /// `SetMTRNGSeed`: the standard init `state[i] = 1812433253 *
     /// (state[i-1] ^ (state[i-1] >> 30)) + i`, with the cursor left
     /// at the loop's exit value 624 (the first draw twists first).

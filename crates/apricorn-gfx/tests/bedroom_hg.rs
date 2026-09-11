@@ -1,11 +1,30 @@
 //! ROM-gated field landing regression and optional review images.
-use apricorn_core::{assets::AssetStore, field::FieldScene, frame::LogicalFrame};
+use apricorn_core::{
+    assets::AssetStore,
+    field::FieldScene,
+    frame::{FieldFrame, LogicalFrame},
+};
 use std::{path::Path, sync::Arc};
+
+/// The field's BG0 as the game shows it: the plane is turned on once
+/// the map is up (`src/field/fieldmap.c:749`,
+/// `GfGfx_EngineATogglePlanes(GX_PLANEMASK_BG0, 1)`) at priority 1 —
+/// below the text layers (BG3 is priority 0 in `sBgTemplate_3`) and
+/// above the priority-3 BG1/BG2 (`gf_3d_render.c:48` is the simple
+/// manager's `G2_SetBG0Priority(1)` reference).
+fn field_frame(scene: FieldScene) -> LogicalFrame {
+    let mut frame = LogicalFrame::default();
+    frame.main.field = Some(FieldFrame::static_scene(Arc::new(scene)));
+    frame.main.bgs[0].enabled = true;
+    frame.main.bgs[0].priority = 1;
+    frame
+}
 
 #[test]
 fn bedroom_renders_real_models_and_both_players() {
     let path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../hg_usa.nds"));
     if !path.exists() {
+        eprintln!("skipping: no ROM at {}", path.display());
         return;
     }
     let store = AssetStore::open(path).unwrap();
@@ -23,8 +42,7 @@ fn bedroom_renders_real_models_and_both_players() {
                 .sum::<usize>()
                 > 250
         );
-        let mut frame = LogicalFrame::default();
-        frame.main.field = Some(Arc::new(scene));
+        let frame = field_frame(scene);
         let screens = apricorn_gfx::render(&frame, &store);
         let pixels = screens[0].as_rgba();
         assert!(pixels.iter().filter(|c| c[..3] != [0, 0, 0]).count() > 15000);

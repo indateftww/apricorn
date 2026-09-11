@@ -18,6 +18,11 @@
 //! The trace header's `input-sha1` / `regions-sha1` are passthrough
 //! hashes of the canonical text files, computed here — they gate diff
 //! pairs, and only this side knows the canonical forms.
+//!
+//! A run can also ask for **screenshots** ([`ShotRequest`]): both LCDs
+//! as PNGs at the end of listed frames, passed through as the oracle's
+//! `--shots F,F,... --shots-dir DIR`. They are review artifacts (ground
+//! truth for engine renders) and never change the trace.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -43,10 +48,93 @@ pub struct ProbeSpec {
     pub name: String,
 }
 
+/// A screenshot request: both LCDs as 256×192 RGB8 PNGs at the end of
+/// each listed frame — after that frame's `RunFrame`, exactly the
+/// machine state the trace's `F` records hash. Files land in `dir` as
+/// `frame_NNNNNN_top.png` / `frame_NNNNNN_bottom.png` (six-digit,
+/// zero-padded frame index). The trace is byte-identical with or
+/// without a request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShotRequest {
+    /// Frames to capture. Frames at or past the run length are never
+    /// written (the oracle warns on stderr); duplicates are harmless.
+    pub frames: Vec<u32>,
+    /// Output directory; created (with parents) before the run.
+    pub dir: PathBuf,
+}
+
+impl ShotRequest {
+    /// The top-LCD PNG path for `frame` under `dir`.
+    #[must_use]
+    pub fn top_path(&self, frame: u32) -> PathBuf {
+        self.dir.join(format!("frame_{frame:06}_top.png"))
+    }
+
+    /// The bottom-LCD PNG path for `frame` under `dir`.
+    #[must_use]
+    pub fn bottom_path(&self, frame: u32) -> PathBuf {
+        self.dir.join(format!("frame_{frame:06}_bottom.png"))
+    }
+
+    /// The oracle's `--shots` value: the frames sorted, deduplicated,
+    /// comma-separated.
+    #[must_use]
+    pub fn frames_arg(&self) -> String {
+        let mut frames = self.frames.clone();
+        frames.sort_unstable();
+        frames.dedup();
+        frames
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
+/// Parses a frame list as the `apricorn-replay --shots` flag takes it:
+/// comma-separated items, each a frame index or an inclusive
+/// `first-last` range (`120,300-305` → 120, 300, 301, …, 305).
+///
+/// # Errors
+/// Returns a [`HarnessError::Syntax`] (line 1) for an empty item, a
+/// non-numeric bound, or a range whose `last` precedes `first`.
+pub fn parse_shot_frames(text: &str) -> Result<Vec<u32>, HarnessError> {
+    let bad = |what: String| HarnessError::Syntax { line: 1, what };
+    let mut frames = Vec::new();
+    for item in text.split(',') {
+        let item = item.trim();
+        let bound = |s: &str| -> Result<u32, HarnessError> {
+            s.parse()
+                .map_err(|_| bad(format!("--shots: '{s}' is not a frame index")))
+        };
+        match item.split_once('-') {
+            Some((first, last)) => {
+                let (first, last) = (bound(first.trim())?, bound(last.trim())?);
+                if last < first {
+                    return Err(bad(format!("--shots: range {first}-{last} runs backwards")));
+                }
+                frames.extend(first..=last);
+            }
+            None => frames.push(bound(item)?),
+        }
+    }
+    Ok(frames)
+}
+
 /// Locates the built oracle under `out/oracle/` (gitignored; built by
 /// `oracle/setup.ps1`). `None` when absent — callers skip silently.
+///
+/// `APRICORN_ORACLE`, when set to an existing file, overrides the
+/// lookup — for driving a scratch build (`out/oracle-dev`) through the
+/// harness before it replaces the shared one.
 #[must_use]
 pub fn find_binary() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("APRICORN_ORACLE") {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     for name in ["apricorn-oracle.exe", "apricorn-oracle"] {
         let path = repo.join("out/oracle").join(name);
@@ -188,6 +276,21 @@ impl OracleRun<'_> {
     /// exits nonzero (its stderr is included), or writes a malformed
     /// trace ([`HarnessError::Syntax`]).
     pub fn run(&self) -> Result<Trace, HarnessError> {
+        self.run_impl(None)
+    }
+
+    /// Like [`run`](Self::run), also writing the screenshots `shots`
+    /// asks for (their directory is created first). The trace is the
+    /// same one `run` would produce.
+    ///
+    /// # Errors
+    /// As [`run`](Self::run), plus a [`HarnessError::Gate`] when the
+    /// shots directory cannot be created.
+    pub fn run_with_shots(&self, shots: &ShotRequest) -> Result<Trace, HarnessError> {
+        self.run_impl(Some(shots))
+    }
+
+    fn run_impl(&self, shots: Option<&ShotRequest>) -> Result<Trace, HarnessError> {
         let Some(binary) = find_binary() else {
             return Err(HarnessError::Gate {
                 what: "oracle binary not built (run oracle/setup.ps1)".to_string(),
@@ -267,6 +370,18 @@ impl OracleRun<'_> {
         }
         if let Some(producer) = self.producer {
             cmd.arg("--producer").arg(producer);
+        }
+        if let Some(shots) = shots.filter(|s| !s.frames.is_empty()) {
+            if let Err(e) = std::fs::create_dir_all(&shots.dir) {
+                cleanup(&dir);
+                return Err(HarnessError::Gate {
+                    what: format!("cannot create {}: {e}", shots.dir.display()),
+                });
+            }
+            cmd.arg("--shots")
+                .arg(shots.frames_arg())
+                .arg("--shots-dir")
+                .arg(&shots.dir);
         }
 
         let status = cmd.output();
@@ -364,6 +479,36 @@ mod tests {
             name: "greedy".to_string(),
         }]);
         assert!(matches!(err, Err(HarnessError::Gate { .. })));
+    }
+
+    #[test]
+    fn shot_frames_parse_items_and_ranges() {
+        assert_eq!(parse_shot_frames("120").unwrap(), vec![120]);
+        assert_eq!(
+            parse_shot_frames("120, 300-303,5").unwrap(),
+            vec![120, 300, 301, 302, 303, 5]
+        );
+        assert!(parse_shot_frames("").is_err());
+        assert!(parse_shot_frames("12,").is_err());
+        assert!(parse_shot_frames("abc").is_err());
+        assert!(parse_shot_frames("10-5").is_err());
+    }
+
+    #[test]
+    fn shot_request_names_files_and_sorts_the_flag() {
+        let shots = ShotRequest {
+            frames: vec![300, 12, 300, 7],
+            dir: PathBuf::from("shots"),
+        };
+        assert_eq!(shots.frames_arg(), "7,12,300");
+        assert_eq!(
+            shots.top_path(7),
+            PathBuf::from("shots").join("frame_000007_top.png")
+        );
+        assert_eq!(
+            shots.bottom_path(300),
+            PathBuf::from("shots").join("frame_000300_bottom.png")
+        );
     }
 
     #[test]

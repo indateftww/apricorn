@@ -31,20 +31,25 @@ Three invariants make the comparison meaningful:
 
 ## Producers
 
-Today two producers emit traces; the real engine joins in Phase 4
-without any format change:
+Three producers emit traces; the engine joined in Phase 4 without any
+format change:
 
 | Producer | What it replays |
 |---|---|
 | **Oracle** (patched melonDS, `docs/oracle.md`) | The full retail ROM: boot, title, menus, gameplay — the behavioral source of truth. |
 | **arm-runner** (`docs/arm-runner.md`) | Original ARM9 functions called with controlled inputs in a test-only interpreter — the per-function oracle where pret has no C. |
+| **Engine** (`apricorn-core` via `apricorn_harness::engine`, `docs/engine-runner.md`) | The real game under the same script and regions; regions resolve by pin *name* to engine state serialized as the ROM lays it out (`producer engine-apricorn-core`; `apricorn-run`, `apricorn-replay --engine`). |
 
-Because the engine does not exist yet, Phase 2's demonstrated
-equivalence is: (a) oracle replay traces (determinism baseline), and
-(b) **oracle-vs-arm-runner differential probes** — the same function run
+Phase 2's demonstrated equivalence, before the engine existed, was:
+(a) oracle replay traces (determinism baseline), and (b)
+**oracle-vs-arm-runner differential probes** — the same function run
 on both sides with the same seeded memory, hashes compared. That
-validates our interpreter against the emulator before any game logic
-exists.
+validated our interpreter against the emulator before any game logic
+existed. The engine-vs-oracle verdict on `corpus/boot-idle` is
+measured in `tests/engine_hg.rs` and explained in
+`docs/engine-runner.md` (a first divergence at frame 0, pinned
+exactly; the oracle's committed baseline turned out to be a
+soft-reset loop caused by its key-mask polarity, not an idle title).
 
 Phase 2 closed with both demonstrated live:
 `tests/equivalence_hg.rs` runs `SetLCRNGSeed(0x1234)` then `LCRandom`
@@ -53,6 +58,20 @@ interpreter — registers and region hashes identical through the strict
 comparator; and `corpus/boot-idle` replays EQUIVALENT through
 `scripts/replay.ps1` (a different pinned RTC diverges at frame 185,
 `sLCRNG_State`, with both hashes printed).
+
+The `boot-idle` baseline was regenerated after the oracle's key-mask
+polarity fix (`docs/oracle.md`, "Input blobs"): the first oracle held
+every key from power-on, so the trace it committed was HeartGold's
+L+R+START+SELECT soft-reset loop (the LCRNG re-seeded at 185, 407,
+629, …; bss re-zeroed at 243, 465, …), never the intro. The corrected
+baseline seeds `sLCRNG_State` once, at frame 185, sees it zeroed at 186
+(the intro movie parks the seed until it exits) and never touched again
+through frame 599; `sMTRNG_State` changes at 150 and 210 only. Phase 4
+adds `corpus/new-game` (its README lists every milestone frame): the
+same regions through the whole new-game flow to the bedroom, 5000
+frames, with the LCRNG restored at 1002 (intro skipped), re-seeded at
+1480 (new-game init) and 4727 (post-Oak), and both LCDs verified by
+oracle screenshots at each step.
 
 ## The formats
 
@@ -157,17 +176,24 @@ in file order at their frame's boundary. The first Phase 2 corpus
 case, `boot-idle`, is a pure replay (no probes): 600 frames, no input,
 the pinned-clock boot.
 
-`apricorn-replay [--update] [--rom ROM] <case-dir>` runs a case on the
-oracle and diffs the fresh trace against the case's committed
-`expected.trace` (with the case's own buckets). Exit codes match
-`apricorn-diff`. `--update` regenerates the baseline instead of
-comparing — a deliberate, reviewed act; baselines never change
-implicitly. `scripts/replay.ps1` / `scripts/replay.sh` wrap the whole
-flow (build the bin, run it) and refuse to guess when the ROM or the
-oracle binary is missing.
+`apricorn-replay [--update] [--engine] [--rom ROM] <case-dir>` runs a
+case on the oracle and diffs the fresh trace against the case's
+committed `expected.trace` (with the case's own buckets). Exit codes
+match `apricorn-diff`. `--engine` runs the case on the engine instead
+and diffs *that* trace against the oracle baseline — the
+engine-vs-oracle verdict. `--update` regenerates the baseline instead
+of comparing — a deliberate, reviewed, oracle-only act (`--update
+--engine` is refused); baselines never change implicitly.
+`scripts/replay.ps1` / `scripts/replay.sh` wrap the whole flow (build
+the bin, run it; `-Engine` / `--engine` pass through) and refuse to
+guess when the ROM or the oracle binary is missing.
 
 Cases skip silently when the ROM (or oracle binary)
 is absent, so ROM-less CI stays green — the same convention as
 apricorn-core's `*_hg` tests. The corpus grows with the phases:
-boot-idle (Phase 2), title screen (Phase 3), new-game flow (Phase 4),
-map walks (Phase 5), battles (Phase 6), long-play scripts (Phase 8).
+boot-idle (Phase 2) and new-game (Phase 4, power-on to the bedroom)
+are committed; map walks (Phase 5), battles (Phase 6) and long-play
+scripts (Phase 8) follow. `apricorn-replay --shots FRAMES --shots-dir
+DIR <case>` (or `scripts/shots.ps1`) writes both LCDs as PNGs at the
+listed frames while replaying — the ground truth every new case is
+authored and reviewed against (`docs/oracle.md`, "Screenshots").

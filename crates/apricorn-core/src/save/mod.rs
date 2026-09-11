@@ -41,6 +41,7 @@
 mod crc;
 mod layout;
 pub mod new_game;
+pub mod vars_flags;
 
 pub use crc::crc16;
 pub use layout::{

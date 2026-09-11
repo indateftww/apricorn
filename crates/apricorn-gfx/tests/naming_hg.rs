@@ -4,6 +4,10 @@ use apricorn_core::assets::AssetStore;
 use apricorn_core::input::{Input, Keys, key};
 use std::sync::Mutex;
 
+/// The naming screen's top LCD (the "Your name?" prompt box); see the
+/// assertion below for its provenance.
+const PROMPT_TOP_GOLDEN: &str = "3bcde999acc4d044836129cc9c2bc289e37661ff";
+
 #[test]
 fn naming_pages_render_from_rom() {
     let path = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../hg_usa.nds"));
@@ -54,6 +58,18 @@ fn naming_pages_render_from_rom() {
         // top LCD has a black backdrop and only its bottom prompt window.
         assert_eq!(screens[1].pixel(128, 64), [0, 0, 0, 255]);
         use sha1::{Digest, Sha1};
+        // The prompt box — "Your name?" in the dialogue frame with the
+        // `{YESNO 0}` screen-focus icon in its reserved column and the
+        // frame's own dark band before the border — is the same on
+        // every page. Pinned after a pixel comparison with the retail
+        // ROM's frames 3876/3942 (corpus `new-game`); it equals
+        // `apricorn-run`'s frame 2323 top LCD of
+        // `scripts/engine-new-game.apin`.
+        assert_eq!(
+            format!("{:x}", Sha1::digest(screens[1].as_rgba().as_flattened())),
+            PROMPT_TOP_GOLDEN,
+            "page {page} top LCD"
+        );
         let hash = format!("{:x}", Sha1::digest(screens[0].as_rgba().as_flattened()));
         assert!(
             !hashes.contains(&hash),

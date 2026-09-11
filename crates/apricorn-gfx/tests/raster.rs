@@ -1389,6 +1389,137 @@ fn dialogue_border_uses_all_eighteen_tiles_and_arrow_keeps_border_palette() {
     );
 }
 
+/// The dialogue box's extents, pinned against pret's geometry after a
+/// retail comparison that questioned them (`docs/game-flow.md`,
+/// "Rendering fixes"):
+///
+/// * the interior fill spans exactly `width` tiles — `sub_0200E6B4`
+///   (`render_window.s`) then writes three border columns to its
+///   right (`x+width`, `+1`, `+2`: tiles `+3/+4/+5`, `+9/+10/+11`,
+///   `+15/+16/+17`) and two to its left. The dark band inside the
+///   retail box's right end *is* border art (`+10`/`+11`), not a fill
+///   shortfall, so the fill must stop at the interior's edge;
+/// * `TextPrinter_DrawDownArrow` (`render_text.c:395-449`) lands its
+///   2×2 block on columns `x+width+1..+2`, rows `y+height-2..-1` —
+///   over `+10`/`+11` — from tiles `base+18 + {0,1,2,1}[index]·4 +
+///   pos`, keeping the border's palette bank (`0x10`); index 3 is
+///   index 1's tiles;
+/// * `RenderScreenFocusIndicatorTile` (`text.c:296-306`) blits the
+///   `{YESNO}` screen-focus icon *inside* the buffer at
+///   `(width-3)·8` — it never reaches the border or the arrow block.
+#[test]
+fn dialogue_fill_border_arrow_and_focus_extents_follow_pret() {
+    let mut store = FixtureStore::new();
+    // Frame tiles: tile n uniform value n % 15 + 1 (bank 4 → 64 + v).
+    let frame_tiles = store.add_tiles(
+        0,
+        &(0..30)
+            .flat_map(|n| [(n % 15 + 1) as u8; 64])
+            .collect::<Vec<_>>(),
+    );
+    // The focus NCGR: four 12-tile frames, tile i uniform i % 16 + 1
+    // shifted so no tile is the colorKey 0 (values 1..=15, then 1).
+    let focus_gfx = store.add_tiles(
+        0,
+        &(0..48)
+            .flat_map(|i| [(i % 15 + 1) as u8; 64])
+            .collect::<Vec<_>>(),
+    );
+    let palette = store.add_palette(true, &gray_palette(96));
+    let mut frame = LogicalFrame::default();
+    frame.main.bgs[0].enabled = true;
+    frame.main.char_blocks[0].push(place(frame_tiles));
+    frame.main.palette_loads.push(load_palette(palette));
+    // sWindowTemplate_DialogMsg's shape (27×4 at (2, 19)) scaled to
+    // 5×4 at (2, 2): interior pixels (16..56, 16..48).
+    frame.main.windows.push(Window {
+        left: 2,
+        top: 2,
+        width: 5,
+        height: 4,
+        palette: 2,
+        fill: 15,
+        frame: Some(WindowFrame {
+            base_tile: 0,
+            palette: 4,
+            dialogue: true,
+        }),
+        ..Window::default()
+    });
+    let [plain, _] = render(&frame, &store);
+    let v = |screen: &ScreenBuffer, x: usize, y: usize| screen.pixel(x, y)[0];
+    let border = |tile: u8| 64 + (tile % 15 + 1);
+    for y in 16..48 {
+        // Two left columns, the fill across exactly width·8 pixels,
+        // then the three right columns and the backdrop.
+        assert_eq!(v(&plain, 0, y), border(6), "row {y}: column +6");
+        assert_eq!(v(&plain, 8, y), border(7), "row {y}: column +7");
+        for x in 16..56 {
+            assert_eq!(v(&plain, x, y), 47, "({x}, {y}): the fill, bank 2");
+        }
+        assert_eq!(v(&plain, 56, y), border(9), "row {y}: column +9 starts at the fill's edge");
+        assert_eq!(v(&plain, 64, y), border(10), "row {y}: column +10");
+        assert_eq!(v(&plain, 72, y), border(11), "row {y}: column +11");
+        assert_eq!(v(&plain, 80, y), 0, "row {y}: nothing past the third column");
+    }
+    for (x, column) in [(0, 0), (8, 1), (16, 2), (48, 2), (56, 3), (64, 4), (72, 5)] {
+        assert_eq!(v(&plain, x, 8), border(column), "top row column {column}");
+        assert_eq!(v(&plain, x, 48), border(12 + column), "bottom row column {column}");
+    }
+
+    // The arrow block: tiles (8..10, 4..6) → pixels (64..80, 32..48).
+    let mut renders = Vec::new();
+    for index in 0..4u8 {
+        frame.main.windows[0].arrow = Some(WindowArrow {
+            base_tile: 0,
+            index,
+        });
+        let [main, _] = render(&frame, &store);
+        let offset = ARROW_TILE_OFFSETS[usize::from(index)];
+        for (pos, (x, y)) in [(64, 32), (72, 32), (64, 40), (72, 40)].into_iter().enumerate() {
+            assert_eq!(
+                v(&main, x, y),
+                border(18 + offset * 4 + pos as u8),
+                "index {index} pos {pos}: tile 18 + {offset}·4 + {pos} at the border's bank"
+            );
+        }
+        // Only those four tiles change: the column above the block
+        // and the +9 column beside it are still border.
+        assert_eq!(v(&main, 64, 24), border(10), "index {index}: +10 above the block");
+        assert_eq!(v(&main, 56, 40), border(9), "index {index}: +9 beside the block");
+        assert_eq!(v(&main, 80, 40), 0, "index {index}: nothing past the block");
+        renders.push(main);
+    }
+    assert_eq!(
+        renders[3].as_rgba(),
+        renders[1].as_rgba(),
+        "index 3 walks back through offset 1: identical to index 1"
+    );
+    assert_ne!(renders[0].as_rgba(), renders[1].as_rgba());
+    assert_ne!(renders[1].as_rgba(), renders[2].as_rgba());
+
+    // The focus icon lands at window x (5-3)·8 = 16 → screen 32..56,
+    // rows 16..48: inside the fill, up to but not over the border.
+    frame.main.windows[0].focus = Some(WindowFocus {
+        asset: focus_gfx,
+        index: 1,
+        scroll: 0,
+    });
+    let [main, _] = render(&frame, &store);
+    let focus_tile = |t: u8| 32 + (t % 15 + 1); // bank 2
+    assert_eq!(v(&main, 31, 16), 47, "left of the icon: the fill");
+    assert_eq!(v(&main, 32, 16), focus_tile(12), "frame 1's tile 0");
+    assert_eq!(v(&main, 55, 47), focus_tile(23), "frame 1's tile 11 ends at the fill's edge");
+    assert_eq!(v(&main, 56, 16), border(9), "the border past the icon is untouched");
+    for (pos, (x, y)) in [(64, 32), (72, 32), (64, 40), (72, 40)].into_iter().enumerate() {
+        assert_eq!(
+            v(&main, x, y),
+            border(18 + ARROW_TILE_OFFSETS[3] * 4 + pos as u8),
+            "the arrow block coexists with the icon"
+        );
+    }
+}
+
 #[test]
 fn blend_brightness_only_changes_the_displayed_target_plane() {
     let mut store = FixtureStore::new();
@@ -1405,4 +1536,254 @@ fn blend_brightness_only_changes_the_displayed_target_plane() {
     frame.main.blend.effect = BlendEffect::BrightnessDown;
     let [main, _] = render(&frame, &store);
     assert_eq!(main.pixel(16, 16), [0, 0, 0, 255]);
+}
+
+// ---------------------------------------------------------------------------
+// The field (3D) plane as engine A's BG0
+// ---------------------------------------------------------------------------
+
+mod field_compositing {
+    use super::*;
+    use apricorn_core::field::{
+        FieldScene,
+        model::{Mesh, Texture, Vertex},
+    };
+    use apricorn_gfx::field::tile_position;
+    use std::sync::Arc;
+
+    /// The bedroom's camera preset (ov01 preset 4) as core decodes it;
+    /// the shim renders synthetic scenes with its own indoor constant,
+    /// so this only fills the scene's data field.
+    fn bedroom_camera() -> apricorn_core::field::ov01::CameraPreset {
+        apricorn_core::field::ov01::CameraPreset {
+            distance: 0x0061_B89B,
+            angle: [0xDC82, 0, 0],
+            padding: 0,
+            perspective_type: 1,
+            fovy_angle: 0x0281,
+            near: 0x0009_6000,
+            far: 0x006C_7000,
+            look_at_offset: [0; 3],
+        }
+    }
+
+    /// A synthetic field: one red ground quad, `half` world units to
+    /// each side of the player's tile (0, 0), `alpha` 0–31, and an
+    /// invisible (alpha 0) player texture so the static view's one
+    /// billboard draws nothing.
+    fn field(half: i32, alpha: u8) -> apricorn_core::frame::FieldFrame {
+        apricorn_core::frame::FieldFrame::static_scene(field_scene(half, alpha))
+    }
+
+    fn field_scene(half: i32, alpha: u8) -> Arc<FieldScene> {
+        let centre = tile_position([0, 0]);
+        let h = half * 4096;
+        let corner = |dx: i32, dz: i32| Vertex {
+            position: [centre[0] + dx, 0, centre[2] + dz],
+            uv: [0, 0],
+            color: 0x7FFF,
+        };
+        let (a, b, c, d) = (corner(-h, -h), corner(h, -h), corner(h, h), corner(-h, h));
+        Arc::new(FieldScene::synthetic(
+            0,
+            vec![Mesh {
+                triangles: vec![[a, b, c], [a, c, d]],
+                texture: Some(Arc::new(Texture {
+                    width: 1,
+                    height: 1,
+                    pixels: vec![[255, 0, 0, 255]],
+                })),
+                texture_flags: 0,
+                alpha,
+            }],
+            Texture {
+                width: 1,
+                height: 1,
+                pixels: vec![[0, 0, 0, 0]],
+            },
+            [0, 0],
+            bedroom_camera(),
+        ))
+    }
+
+    /// The field (BG0, enabled) under an opaque gray BG1 (value 5
+    /// everywhere), both at priority 0 until a test says otherwise.
+    fn scene(store: &mut FixtureStore) -> LogicalFrame {
+        let tiles = store.add_tiles(0, &[5u8; 64]);
+        let screen = store.add_screen(8, 8, &[entry(0, false, false, 0)]);
+        let palette = store.add_palette(true, &gray_palette(16));
+        let mut frame = LogicalFrame {
+            main: engine(
+                &[BgLayer::default(), bg_layer(screen)],
+                &[(0, tiles)],
+                palette,
+            ),
+            ..LogicalFrame::default()
+        };
+        frame.main.field = Some(field(100, 31));
+        frame.main.bgs[0].enabled = true;
+        frame
+    }
+
+    #[test]
+    fn the_field_is_bg0_and_sorts_by_priority() {
+        let mut store = FixtureStore::new();
+        let mut frame = scene(&mut store);
+        // BG1 at priority 0 above the field at priority 1.
+        frame.main.bgs[0].priority = 1;
+        frame.main.bgs[1].priority = 0;
+        let [main, _] = render(&frame, &store);
+        assert_eq!(main.pixel(128, 96), [5, 5, 5, 255], "BG1 covers the field");
+        // The field on top: red where the quad lands, BG1 elsewhere.
+        frame.main.bgs[0].priority = 0;
+        frame.main.bgs[1].priority = 1;
+        let [main, _] = render(&frame, &store);
+        assert_eq!(main.pixel(128, 96), [255, 0, 0, 255], "the field shows");
+        assert_eq!(
+            main.pixel(0, 0),
+            [5, 5, 5, 255],
+            "uncovered 3D pixels are transparent"
+        );
+        // A tie goes to the lower BG index — BG0, the field.
+        frame.main.bgs[1].priority = 0;
+        assert_eq!(render(&frame, &store)[0].pixel(128, 96), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn a_disabled_bg0_or_the_hardware_window_hides_the_field() {
+        let mut store = FixtureStore::new();
+        let mut frame = scene(&mut store);
+        frame.main.bgs[1].enabled = false;
+        frame.main.backdrop = 0x7C00; // blue
+        let [main, _] = render(&frame, &store);
+        assert_eq!(main.pixel(128, 96), [255, 0, 0, 255]);
+        assert_eq!(main.pixel(0, 0), [0, 0, 255, 255], "backdrop where clear");
+        frame.main.bgs[0].enabled = false;
+        assert_eq!(render(&frame, &store)[0].pixel(128, 96), [0, 0, 255, 255]);
+        frame.main.bgs[0].enabled = true;
+        frame.main.bgs[0].hidden_rect = Some((120, 90, 136, 102));
+        let [main, _] = render(&frame, &store);
+        assert_eq!(
+            main.pixel(128, 96),
+            [0, 0, 255, 255],
+            "hidden inside the rect"
+        );
+        assert_eq!(main.pixel(140, 96), [255, 0, 0, 255], "shown outside it");
+    }
+
+    #[test]
+    fn sprites_composite_above_the_field_by_priority_and_win_ties() {
+        let mut store = FixtureStore::new();
+        let mut frame = scene(&mut store);
+        frame.main.bgs[1].enabled = false;
+        frame.main.bgs[0].priority = 1;
+        // The OAM fixture: an 8×8 cell whose pixel value is its column
+        // (0 transparent), OBJ palette bank 1, placed so it lands on
+        // the field around (126..134, 92..100).
+        let tiles = store.add_tiles(0, &(0..64).map(|i| (i % 8) as u8).collect::<Vec<_>>());
+        let obj_palette = store.add_palette(true, &gray_palette(32));
+        let mut sprite = store.add_sprite(tiles, obj_palette);
+        sprite.x = 128;
+        sprite.y = 96;
+        frame.main.sprites.push(sprite);
+        let [main, _] = render(&frame, &store);
+        assert_eq!(main.pixel(127, 93), [17, 17, 17, 255], "OBJ over the field");
+        assert_eq!(
+            main.pixel(126, 93),
+            [255, 0, 0, 255],
+            "OBJ value 0 reveals the field"
+        );
+        frame.main.sprites[0].priority = 1;
+        assert_eq!(
+            render(&frame, &store)[0].pixel(127, 93)[0],
+            17,
+            "OBJ wins the tie"
+        );
+        frame.main.bgs[0].priority = 0;
+        assert_eq!(
+            render(&frame, &store)[0].pixel(127, 93),
+            [255, 0, 0, 255],
+            "a higher-priority field hides the OBJ"
+        );
+    }
+
+    #[test]
+    fn master_brightness_and_fades_apply_to_the_field() {
+        let mut store = FixtureStore::new();
+        let mut frame = scene(&mut store);
+        frame.main.bgs[1].enabled = false;
+        frame.main.brightness = MasterBrightness {
+            mode: BrightnessMode::Down,
+            value: 8,
+        };
+        let [main, _] = render(&frame, &store);
+        let down = |c: u32| (c - (c * 8 >> 4)) as u8;
+        assert_eq!(main.pixel(128, 96), [down(255), 0, 0, 255]);
+        // The blend unit's fade on BG0 as a first target (no second
+        // target below), then the master brightness on top of it:
+        // red 255 stays, the other channels rise to 255 · 8/16 = 127,
+        // then all three halve.
+        frame.main.blend = Blend {
+            plane1: plane::BG0,
+            effect: BlendEffect::BrightnessUp,
+            evy: 8,
+            ..Blend::default()
+        };
+        let [main, _] = render(&frame, &store);
+        let up: u32 = 255 * 8 >> 4;
+        assert_eq!(main.pixel(128, 96), [down(255), down(up), down(up), 255]);
+    }
+
+    #[test]
+    fn translucent_field_pixels_blend_with_the_second_target_by_their_alpha() {
+        let mut store = FixtureStore::new();
+        let mut frame = scene(&mut store);
+        frame.main.field = Some(field(100, 15));
+        frame.main.bgs[0].priority = 0;
+        frame.main.bgs[1].priority = 1;
+        // No second target: the pixel shows as is, whatever the mode.
+        let [main, _] = render(&frame, &store);
+        assert_eq!(main.pixel(128, 96), [255, 0, 0, 255]);
+        // BG1 as a second target: ColorBlend5 with eva = 16, evb = 16
+        // and the + 0x10 rounding term, regardless of the effect mode
+        // or first-target mask. The blue channel pins the rounding:
+        // (0 · 16 + 5 · 16 + 16) >> 5 = 3, where an unrounded shift
+        // would give 2.
+        frame.main.blend = Blend {
+            plane2: plane::BG1,
+            ..Blend::default()
+        };
+        let [main, _] = render(&frame, &store);
+        let mix = |a: u32, b: u32| ((a * 16 + b * 16 + 0x10) >> 5) as u8;
+        assert_eq!(mix(0, 5), 3);
+        assert_eq!(
+            main.pixel(128, 96),
+            [mix(255, 5), mix(0, 5), mix(0, 5), 255]
+        );
+        // An opaque field pixel over a second target is unchanged even
+        // under an alpha effect with EVA/EBV set — the 3D plane never
+        // uses the register weights.
+        frame.main.field = Some(field(100, 31));
+        frame.main.blend = Blend {
+            plane1: plane::BG0,
+            effect: BlendEffect::Alpha,
+            plane2: plane::BG1,
+            eva: 8,
+            ebv: 8,
+            evy: 0,
+        };
+        assert_eq!(render(&frame, &store)[0].pixel(128, 96), [255, 0, 0, 255]);
+        // The backdrop completes the search too.
+        frame.main.field = Some(field(100, 15));
+        frame.main.bgs[1].enabled = false;
+        frame.main.backdrop = 0x7C00; // blue
+        frame.main.blend = Blend {
+            plane2: plane::BD,
+            ..Blend::default()
+        };
+        assert_eq!(
+            render(&frame, &store)[0].pixel(128, 96),
+            [mix(255, 0), 0, mix(0, 255), 255]
+        );
+    }
 }

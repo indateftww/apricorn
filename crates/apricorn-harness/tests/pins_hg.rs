@@ -46,17 +46,20 @@ fn pins_verify_against_retail_arm9_image() {
         .expect("committed pins must match the retail image");
 
     // The pins are exactly the committed differential surface: the 17
-    // math pins of Phase 2/3 (12 code + 5 data) plus the 47 save pins
-    // of Phase 4 step 4 (45 size stubs + 2 chunk-table globals).
-    assert_eq!(table.pins().len(), 64);
+    // math pins of Phase 2/3 (12 code + 5 data), the 47 save pins of
+    // Phase 4 step 4 (45 size stubs + 2 chunk-table globals), the
+    // map-header table pin, the 26 field-movement pins (25 code +
+    // gMovementCmdTable) and the 12 day/night pins (9 code + 3 data)
+    // of Phase 5.
+    assert_eq!(table.pins().len(), 103);
     assert_eq!(
         table
             .pins()
             .iter()
             .filter(|p| p.mode == PinMode::Arm || p.mode == PinMode::Thumb)
             .count(),
-        57,
-        "57 code pins"
+        91,
+        "91 code pins"
     );
 
     // The discovery constants really are where the table's provenance
