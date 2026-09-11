@@ -602,12 +602,26 @@ impl FieldFrame {
     /// The static view of a loaded scene: the header's camera preset
     /// targeting the player's tile, and the scene's south-facing player
     /// image as the one object standing on that tile — what the
-    /// Phase 4 bedroom landing showed.
+    /// Phase 4 bedroom landing showed, placed as the live system places
+    /// a standing player: the tile centre lifted to the ground height
+    /// the cells' BDHC plates give (`field::height`, 0 where none
+    /// covers the tile) for the camera target, plus
+    /// [`SPRITE_OFFSET`](crate::field::system::SPRITE_OFFSET) for the
+    /// billboard's anchor.
     #[must_use]
     pub fn static_scene(scene: std::sync::Arc<crate::field::FieldScene>) -> Self {
+        use crate::field::height::{HeightMode, scene_height};
+        use crate::field::map_object::VecFx32;
+        use crate::field::system::SPRITE_OFFSET;
         let [x, z] = scene.position;
-        let target = crate::field::map_object::VecFx32::from_tile(x, 0, z);
-        let target = [target.x, target.y, target.z];
+        let tile = VecFx32::from_tile(x, 0, z);
+        let y = scene_height(&scene.cells, HeightMode::Nearest, tile.x, 0, tile.z).unwrap_or(0);
+        let target = [tile.x, y, tile.z];
+        let world_pos = [
+            tile.x + SPRITE_OFFSET.x,
+            y + SPRITE_OFFSET.y,
+            tile.z + SPRITE_OFFSET.z,
+        ];
         let player = std::sync::Arc::new(scene.player.clone());
         let size = (
             u16::try_from(player.width).unwrap_or(u16::MAX),
@@ -621,7 +635,7 @@ impl FieldFrame {
             objects: vec![ObjectView {
                 texture: player,
                 rect: (0, 0, size.0, size.1),
-                world_pos: target,
+                world_pos,
                 size_px: size,
                 mirrored: false,
             }],

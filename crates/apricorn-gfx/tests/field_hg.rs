@@ -21,9 +21,15 @@ const ROM_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../hg_usa.nds");
 /// The engine-A screen hashes for the two player genders — the whole
 /// pipeline's pin: NSBMD decode, camera, rasterizer, billboard,
 /// compositor (BG0 at priority 1 over the backdrop).
+///
+/// Re-pinned when `FieldFrame::static_scene` took the live system's
+/// billboard anchor (`SPRITE_OFFSET`, 6.5 units toward the camera):
+/// the player's hair box moved from rows 72-78 to 77-83, which is the
+/// live bedroom frame's and the oracle frame 4816's (124,77,130,83)
+/// exactly; nothing else in the frame moved.
 const BEDROOM_GOLDEN: [&str; 2] = [
-    "b27b8d22edd73ee82c605bb9a6c02c2694d10f0c",
-    "9508cd6a7781956ab7985aba5ed7800cfacee4fc",
+    "5299d14f0c683d9b6e6cd7eff3387d746a120f42",
+    "2b9e8211ef53e2ec5cd7689f32cbc754b2d302d1",
 ];
 
 fn open_rom() -> Option<AssetStore> {
