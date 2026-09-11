@@ -41,11 +41,25 @@
 //!   (the register's 5-bit weight, value 16 reaches the limit).
 //!
 //! Intro OBJ cells are rasterized with their own palettes and OAM
-//! ordering, winning BG priority ties. Engine A's 3D framebuffer-as-BG0
-//! still renders as absent, and
-//! no VRAM banking exists — layers name char-block slots. A layer
-//! whose referenced asset is missing renders transparent, which is
-//! how the deferred 3D BG0 is expressed. Dialogue arrows contain
+//! ordering, winning BG priority ties.
+//!
+//! * **The 3D plane** (`GX_BG0_AS_3D`): when the engine carries a
+//!   [`EngineFrame::field`], BG0 *is* the 3D core's output —
+//!   [`crate::field::render`] draws it first (opaque, billboards,
+//!   translucent; alpha 0 where nothing covered the pixel) and the
+//!   compositor samples it in BG0's place with BG0's `priority`,
+//!   `enabled` and `hidden_rect`, ignoring BG0's tilemap and windows.
+//!   A 3D pixel blends with the topmost second-target pixel below it
+//!   by its *own* alpha — `(first · (a + 1) + second · (32 − a − 1))
+//!   >> 5`, melonDS's `ColorBlend5` — whenever `BLDCNT` names that
+//!   plane a second target, regardless of the effect mode or the
+//!   first-target mask (an opaque pixel, `a = 31`, comes through
+//!   unchanged); without a second target the brightness effects apply
+//!   to it as to any first-target plane. OBJ pixels still win priority
+//!   ties over it, and master brightness applies last.
+//!
+//! No VRAM banking exists — layers name char-block slots. A layer
+//! whose referenced asset is missing renders transparent. Dialogue arrows contain
 //! the original border pixels under their ink; clearing an arrow
 //! restores that border. The glyph row-doubling table is the
 //! all-rows flag the boot flow uses, not per-row bits.
@@ -184,17 +198,29 @@ fn render_engine<S: AssetSource + ?Sized>(engine: &EngineFrame, store: &S) -> Sc
     order.sort_by_key(|&i| (engine.bgs[i].priority, i));
     let palette = compose_palette(engine, store);
     let objects = crate::sprites::rasterize(engine, store);
+    // The 3D core's output stands in for BG0's tilemap while a field
+    // is bound (GX_BG0_AS_3D, fieldmap.c:514); the plane's alpha is 0
+    // where no polygon covered the pixel (the clear colour's alpha).
+    let field = engine.field.as_deref().map(|scene| {
+        let mut pixels = vec![[0u8; 4]; ScreenBuffer::WIDTH * ScreenBuffer::HEIGHT];
+        let mut depth = vec![f64::INFINITY; ScreenBuffer::WIDTH * ScreenBuffer::HEIGHT];
+        crate::field::render(scene, &mut pixels, &mut depth);
+        pixels
+    });
 
     let mut out = ScreenBuffer::new();
-    if let Some(field) = &engine.field {
-        crate::field::render(field, &mut out.pixels);
-        apply_brightness(engine, &mut out);
-        return out;
-    }
     for y in 0..ScreenBuffer::HEIGHT {
         for x in 0..ScreenBuffer::WIDTH {
-            let [r, g, b, _] =
-                composite_pixel(engine, store, &palette, &order, objects[y * 256 + x], x, y);
+            let [r, g, b, _] = composite_pixel(
+                engine,
+                store,
+                &palette,
+                &order,
+                field.as_deref(),
+                objects[y * 256 + x],
+                x,
+                y,
+            );
             out.pixels[out.index(x, y)] = [r, g, b, 255];
         }
     }
@@ -230,11 +256,14 @@ fn compose_palette<S: AssetSource + ?Sized>(engine: &EngineFrame, store: &S) -> 
 
 /// Composites one pixel: the topmost opaque layer pixel (by draw
 /// order) or the backdrop, alpha-blended per the engine's blend unit.
+/// `field` is the rendered 3D plane standing in for BG0, if bound.
+#[allow(clippy::too_many_arguments)]
 fn composite_pixel<S: AssetSource + ?Sized>(
     engine: &EngineFrame,
     store: &S,
     palette: &[[u8; 4]],
     order: &[usize; 4],
+    field: Option<&[[u8; 4]]>,
     object: Option<crate::sprites::Pixel>,
     x: usize,
     y: usize,
@@ -244,6 +273,9 @@ fn composite_pixel<S: AssetSource + ?Sized>(
     // first target — the second target found below it.
     let mut top: Option<([u8; 4], bool, u8)> = None;
     let mut second: Option<[u8; 4]> = None;
+    // The topmost pixel's 5-bit alpha when it is the 3D plane's: such
+    // a pixel always looks for a second target and blends by this.
+    let mut three_d: Option<u8> = None;
 
     let object_slot = object.map(|obj| {
         order
@@ -252,22 +284,25 @@ fn composite_pixel<S: AssetSource + ?Sized>(
             .unwrap_or(4)
     });
     for slot in 0..4 + usize::from(object.is_some()) {
-        let (color, bit, semi) = if object_slot == Some(slot) {
+        let (color, bit, semi, is_3d) = if object_slot == Some(slot) {
             let obj = object.expect("the inserted OBJ pixel");
-            (obj.color, plane::OBJ, obj.semi)
+            (obj.color, plane::OBJ, obj.semi, false)
         } else {
             let i = order[slot - usize::from(object_slot.is_some_and(|at| at < slot))];
             let layer = &engine.bgs[i];
             if !layer.enabled {
                 continue;
             }
-            let Some(color) = sample_layer(engine, store, palette, i, layer, x, y) else {
+            let Some(color) = sample_layer(engine, store, palette, field, i, layer, x, y) else {
                 continue;
             };
-            (color, plane::BG0 << i, false)
+            (color, plane::BG0 << i, false, i == 0 && field.is_some())
         };
         if top.is_none() {
-            let blend_top = semi || (blending && engine.blend.plane1 & bit != 0);
+            if is_3d {
+                three_d = Some(alpha5(color[3]));
+            }
+            let blend_top = semi || is_3d || (blending && engine.blend.plane1 & bit != 0);
             top = Some((color, blend_top, bit));
             // A topmost pixel outside plane1 passes through
             // unblended — nothing below can change it.
@@ -285,22 +320,22 @@ fn composite_pixel<S: AssetSource + ?Sized>(
         Some(top) => top,
         None => (backdrop, false, plane::BD),
     };
-    if !blend_top && engine.blend.plane1 & bit != 0 {
-        let weight = u32::from(engine.blend.evy.min(16));
-        for channel in &mut color[..3] {
-            let c = u32::from(*channel);
-            *channel = match engine.blend.effect {
-                BlendEffect::BrightnessUp => (c + ((255 - c) * weight >> 4)) as u8,
-                BlendEffect::BrightnessDown => (c - (c * weight >> 4)) as u8,
-                _ => *channel,
-            };
-        }
-    }
     // The backdrop is the bottom-most plane: it completes a second
     // target search (as plane BD) but never starts one here — there
     // is nothing below it to blend with.
     if blend_top && second.is_none() && engine.blend.plane2 & plane::BD != 0 {
         second = Some(backdrop);
+    }
+    // The 3D plane: melonDS's ColorComposite effect 5 when a second
+    // target lies below, else the plain first-target effects.
+    if let Some(alpha) = three_d {
+        return match second {
+            Some(second) => blend_3d(color, second, alpha),
+            None => plane_brightness(engine, color, bit),
+        };
+    }
+    if !blend_top {
+        color = plane_brightness(engine, color, bit);
     }
 
     match (blend_top, second) {
@@ -309,14 +344,60 @@ fn composite_pixel<S: AssetSource + ?Sized>(
     }
 }
 
+/// The blend unit's brightness fades (`BLDCNT` effects 2 and 3) on a
+/// first-target plane's pixel; other effects leave it alone.
+fn plane_brightness(engine: &EngineFrame, mut color: [u8; 4], bit: u8) -> [u8; 4] {
+    if engine.blend.plane1 & bit == 0 {
+        return color;
+    }
+    let weight = u32::from(engine.blend.evy.min(16));
+    for channel in &mut color[..3] {
+        let c = u32::from(*channel);
+        *channel = match engine.blend.effect {
+            BlendEffect::BrightnessUp => (c + ((255 - c) * weight >> 4)) as u8,
+            BlendEffect::BrightnessDown => (c - (c * weight >> 4)) as u8,
+            _ => *channel,
+        };
+    }
+    color
+}
+
+/// An 8-bit alpha back to the 3D core's 5 bits, rounded.
+fn alpha5(alpha: u8) -> u8 {
+    ((u32::from(alpha) * 31 + 127) / 255) as u8
+}
+
+/// The 3D plane's own alpha blend — melonDS `GPU2D_Soft.h`
+/// `ColorBlend5`: `eva = a + 1`, `evb = 32 − eva`, per channel
+/// `(first · eva + second · evb) >> 5`, clamped; in 8-bit channels
+/// here where melonDS works in 6.
+fn blend_3d(first: [u8; 4], second: [u8; 4], alpha: u8) -> [u8; 4] {
+    let eva = u32::from(alpha.min(31)) + 1;
+    let evb = 32 - eva;
+    let mix = |a: u8, b: u8| {
+        let v = (u32::from(a) * eva + u32::from(b) * evb) >> 5;
+        u8::try_from(v.min(0xFF)).expect("clamped to u8")
+    };
+    [
+        mix(first[0], second[0]),
+        mix(first[1], second[1]),
+        mix(first[2], second[2]),
+        255,
+    ]
+}
+
 /// Samples one layer at output pixel `(x, y)` — `None` when the
 /// layer is transparent there (color 0, a missing asset, or a tile
 /// index beyond the char block). The layer's windows stand in for
-/// the screen map wherever they cover.
+/// the screen map wherever they cover. With a `field` bound, BG0 is
+/// the 3D plane: its rendered pixel (alpha 0 is transparent) replaces
+/// the tilemap, windows and edits, after the hardware window.
+#[allow(clippy::too_many_arguments)]
 fn sample_layer<S: AssetSource + ?Sized>(
     engine: &EngineFrame,
     store: &S,
     palette: &[[u8; 4]],
+    field: Option<&[[u8; 4]]>,
     layer_index: usize,
     layer: &BgLayer,
     x: usize,
@@ -330,6 +411,12 @@ fn sample_layer<S: AssetSource + ?Sized>(
             && y < usize::from(bottom)
         {
             return None;
+        }
+    }
+    if layer_index == 0 {
+        if let Some(field) = field {
+            let pixel = field[y * ScreenBuffer::WIDTH + x];
+            return (pixel[3] != 0).then_some(pixel);
         }
     }
     let map_w = usize::from(layer.size.tiles_wide()) * 8;

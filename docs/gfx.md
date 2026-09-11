@@ -215,6 +215,182 @@ test layout: the golden hashes are the end-to-end pin, but they need
 human eyes on real color at least once per pipeline change — which is
 what the demo script and the window are for.
 
+## Field (3D) layer
+
+`apricorn-gfx::field` draws the overworld: the picture engine A's BG0
+shows while a map is up. This is the crate's one documented exception
+to "no floating point" — `f64` with a fixed evaluation order and no
+transcendental function, so a scene still renders bit-identically on
+every platform (the SHA-1 goldens in `tests/field_hg.rs` are the
+proof, as `tests/raster_hg.rs` is for the 2D path).
+
+### What the original does
+
+The field binds BG0 to the 3D core (`GX_BG0_AS_3D`,
+`src/field/fieldmap.c:514`), turns the plane on once the map is loaded
+(`:749`), and draws each frame in `ov01_021E6220` (`:580-613`): reset,
+push the camera (`Camera_PushLookAtToNNSGlb`), draw the loaded map
+cells and the props, then — with the projection's `_32` biased — the
+field effects and the billboard lists, restore the projection, draw the
+3D object tasks, and swap with `GX_SORTMODE_AUTO` under the camera's
+Z-buffer mode. The hardware draws opaque polygons first and translucent
+ones after them, depth tested but (with the depth-update bit clear)
+not written; the clear colour is black with alpha 0
+(`G3X_SetClearColor(RGB_BLACK, 0, …)`, `src/gf_3d_vramman.c:60`), so
+uncovered pixels are transparent to the 2D layers below.
+
+### Compositing rules (`raster.rs`)
+
+When an engine frame carries a `field`, BG0 *is* the 3D plane:
+
+* `field::render` runs first and yields RGBA8 (alpha 0 where nothing
+  covered the pixel, the polygon's alpha otherwise) plus a depth
+  buffer. The compositor samples that in BG0's place, honouring BG0's
+  `priority`, `enabled` and `hidden_rect` (the hardware window) and
+  ignoring BG0's tilemap, windows and edits — a tilemap cannot show on
+  a BG bound to the 3D core.
+* Everything else is unchanged: BG1–3 and OBJ composite by priority
+  (ties to the lower BG index; OBJ wins ties), then the blend unit,
+  the backdrop, and master brightness last.
+* A 3D pixel blends with the topmost second-target pixel below it by
+  its **own** alpha — `(first · (a+1) + second · (32−a−1)) >> 5`,
+  melonDS `GPU2D_Soft.h` `ColorBlend5` — whenever `BLDCNT` names that
+  plane a second target, regardless of the effect mode or the
+  first-target mask; an opaque pixel (`a = 31`) is unchanged, so the
+  register `EVA`/`EBV` never apply to the 3D plane. Without a second
+  target the brightness fades (effects 2/3) apply to it as to any
+  first-target plane. (melonDS works in 6-bit channels; this pipeline
+  keeps its 8-bit convention.)
+* The game shows the field's BG0 at priority 1 below the priority-0
+  text layer (`sBgTemplate_3`) and above BG1/BG2 at 3 — the scene
+  that binds a field must enable BG0 and set that priority, as the
+  ROM tests do (`GfGfx_EngineATogglePlanes(GX_PLANEMASK_BG0, 1)` at
+  `fieldmap.c:749`; `gf_3d_render.c:48` is the simple manager's
+  `G2_SetBG0Priority(1)`).
+
+### Camera math (`field/camera.rs`)
+
+Port of `src/camera.c` and the preset table `ov01_02206478`
+(`asm/overlay_01_021EABA8.s:465`, 17 rows of `{fx32 distance; u16
+angle x, y, z, pad; u16 perspectiveType; u16 fovy; fx32 near; fx32
+far; VecFx32 lookAtOffset}`, read by `FieldCamera_Create`). Preset 0
+(outdoor) is perspective at distance ≈ 667, pitch `0xDD62`, half-angle
+`0x5C1`; preset 4 (rooms, the bedroom) is orthographic at ≈ 1563.5,
+pitch `0xDC82`, half-angle `0x281`; both near 150, far 1200 / 1736.
+
+* **Angles and the table.** Angles are 16-bit units; sines and cosines
+  come from the SDK's `FX_SinCosTable_` (`fx_trig.h:20-26`, index
+  `angle >> 4`, 4096 fx16 pairs) — regenerated as `round(sin · 4096)`,
+  which reproduces the vendored table exactly (SHA-1 pinned in the
+  unit tests). The table is not unit-length under rounding (the pitch
+  pair for preset 0 has length 4093.3), so the camera ends 666.48
+  from its target rather than the preset's 666.92 — as on the DS.
+* **Position.** `Camera_CalcLookAtPosFromTargetAndAngle`
+  (`camera.c:20-26`): `pos = target + (sin(ay)·d·cos(ax), sin(−ax)·d,
+  cos(ay)·d·cos(ax))` with `FX_Mul`'s `(a·b + 0x800) >> 12` rounding at
+  each step, then the preset's look-at offset on both. The target is
+  the player's position vector (tile centre, `x·16+8`, ground height,
+  `z·16+8`).
+* **View.** `MTX_LookAt(pos, (0,1,0), target)` — gluLookAt in the
+  SDK's row-vector form, camera space +x right, +y up, looking down −z.
+* **Projection.** Perspective: `MTX_PerspectiveW(fovySin, fovyCos,
+  aspect, n, f)` = gluPerspective with `cot = fovyCos / fovySin` — the
+  preset's `perspectiveAngle` is the vertical FOV's *half* angle.
+  Orthographic (`Camera_ApplyPerspectiveType`, `camera.c:271-274`):
+  `y = FX_Mul(FX_Div(fovySin, fovyCos), distance)`, `x = FX_Mul(y,
+  aspect)`, `MTX_OrthoW(y, −y, −x, x, n, f)` — the extents are computed
+  in fx32 exactly as the C does (95.8125 × 127.7422 for preset 4). The
+  aspect is `FX32_CONST(1.33333333)` = 5461/4096. Both presets scale
+  ≈1 world unit to 1 pixel at the target depth, which is why the
+  32-unit sprite quads are 32 px tall.
+* **Viewport.** `G3_ViewPort(0, 0, 255, 191)`: NDC x → 0..256, NDC
+  y → rows 192..0; depth is NDC z (smaller nearer), tested with
+  `z ≤ stored + ε` so coplanar decals drawn later still show.
+* **Deviation.** The SDK builds the matrices in fx32; this port builds
+  them in `f64` from the fx32 inputs, so vertices land within a small
+  fraction of a pixel of the hardware's. No near-plane clipping: a
+  triangle with a vertex behind the eye is dropped whole.
+
+### The billboard "shear" and map objects (`field/billboard.rs`)
+
+`ov01_021E6220` computes `t = FX_Mul(8 << 12, FX_CosIdx(−angle.x))`
+(`FieldSystem.unk11C = 8`) and adds `_22 · t` to the projection's
+`_32` while the field effects and `BillboardLists_Draw` run
+(`fieldmap.c:590-613`). In the row-vector convention `_32` is the
+constant term of clip z, so this is a **depth bias of 8·cos(pitch)
+world units toward the camera** (≈ 5.2 for the field pitches), not a
+geometric shear: a quad anchored at a character's feet is otherwise
+coplanar with the ground along its bottom row and loses the depth test
+to it. `Camera::billboard_projection` carries exactly this matrix.
+
+Map objects are the `mmodel` quads of `a/0/8/1` (832 NSBTX, 14 NSBMD).
+`ov01_022074A8` (`asm/overlay_01_sprite_data.s:436`) maps a sprite to
+its NSBTX and packs the size class into bits 10–15 of its third u16;
+`sub_021FA248` resolves the class through `ov01_02207318`. The standard
+class `mmdl_m32x32` (member 266) has one node and the SBC program
+`NODEDESC, NODE, BB, POSSCALE, MAT, SHP, POSSCALE, RET` — opcode 7 is
+`NNS_G3D_SBC_BB`, the full billboard: the node keeps its camera-space
+translation and scale and its rotation becomes the identity *in camera
+space*. The quad is `x ∈ [−16, 16], y ∈ [0, 32], z = 0` with texture
+`v = 32` at the bottom (read from the ROM's display list), i.e.
+anchored at the **feet**, 32 units tall, camera-facing. `BillboardView
+{ texture, rect, world_pos, size_px }` places such a quad: the corners
+are built in camera space from the projected anchor, projected through
+the biased matrix, and rasterized as two opaque triangles. Which
+texture, direction and walk frame to show is the map-object model's
+concern; the view takes a texture and a texel rectangle.
+
+The previous shim blitted the player image at a hand-tuned
+`(−16, −28)` from the projected tile centre with a fixed depth bias of
+8; it now stands on the quad's anchor with the original's bias, which
+moves the sprite up by the 4 rows the old offset added.
+
+### Rasterizer
+
+Triangles are sampled at pixel centres with a top-left fill rule (a
+shared edge is drawn exactly once, so translucent seams do not
+double-blend — the old rule drew both sides), attributes are
+interpolated perspective-correctly (`attr/w`, `1/w`), texels are
+nearest with `TEXIMAGE_PARAM`'s repeat/flip bits, colour is modulated
+by the interpolated 5-bit vertex colour (`texel · (c+1) / 32`), and the
+polygon alpha scales the texel alpha. Translucent pixels blend
+`src·a + dst·(255−a)` over a drawn pixel and *replace* a clear one
+(alpha 0), keeping the larger alpha — the 3D core's rule. Opaque meshes
+draw with depth writes, then billboards, then translucent meshes
+(polygon alpha < 31) in model order without depth writes; NDS auto
+sorting of translucent polygons is not modelled.
+
+### Seams for the map-data `FieldScene`
+
+`SceneView { meshes: &[Mesh], billboards: Vec<BillboardView>, camera:
+Camera }` is what `render_view` draws. Map cells are world-space meshes
+parsed with their matrix-cell origin; props (`MapPropArcData { model,
+translation, rotation, scale }`) are baked into world meshes with
+pret's model matrix — `RotX(rotation.x) · RotY(rotation.y) ·
+RotZ(rotation.z)` from the low 16 bits of each fx32 component as a
+16-bit angle (`sub_02020D2C`, `asm/unk_02020B8C.s:218`), then scale and
+translation (`GF3dRender_DrawModel`, `src/gf_3d_render.c:34`);
+`camera::sin_idx`/`cos_idx` give the same table values. Billboards take
+the decoded NSBTX (`model::decode_texture`), the frame rect, the
+object's position vector and the size class' quad size.
+`CameraPreset::from_table_entry` reads a 0x24-byte row of
+`ov01_02206478`; `Camera::from_preset(preset, target)` resolves it.
+
+### Verification
+
+`tests/field_hg.rs` (ROM-gated) pins the bedroom through the whole
+pipeline — NSBMD decode, camera, rasterizer, billboard, compositor at
+BG0 priority 1 — by SHA-1 for both genders, checks the plane's
+coverage and the sprite's depth, and renders the room through the
+outdoor perspective preset; `APRICORN_RENDER_OUT` writes the review
+PNGs (`field-bedroom-{0,1}.png`, `field-bedroom-outdoor.png`).
+`tests/raster.rs` (no ROM) composites a synthetic one-quad field under
+BG1 at lower and higher priority, under a sprite, with the plane
+disabled and windowed, under master brightness and the blend fades,
+and translucent over BG1 and the backdrop. The camera unit tests pin
+the sine table (SHA-1), `FX_Mul`/`FX_Div`, the preset row layout, and
+hand-derived projections for both presets.
+
 ## Presenters
 
 ### Headless: `apricorn-gfx-dump`
