@@ -17,9 +17,9 @@ const ROM_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../hg_usa.nds");
 /// player mid-tile, the camera with him), house 1F at the first fully
 /// faded-in tick after the stairs, New Bark Town at the first fully
 /// faded-in tick after the front door.
-const BEDROOM_MID_STEP: &str = "0000000000000000000000000000000000000000";
-const HOUSE_1F_ARRIVAL: &str = "0000000000000000000000000000000000000000";
-const NEW_BARK_ARRIVAL: &str = "0000000000000000000000000000000000000000";
+const BEDROOM_MID_STEP: &str = "0867fcf6cf096f3b1aae90cf6b8ad00e9851a213";
+const HOUSE_1F_ARRIVAL: &str = "75715d470becdf2cce767916d43d6e593fc47484";
+const NEW_BARK_ARRIVAL: &str = "52a6887fcca2acdfc3c82c0d9825e4e28c519a83";
 
 fn open_rom() -> Option<AssetStore> {
     let path = Path::new(ROM_PATH);

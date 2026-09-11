@@ -389,3 +389,66 @@ fn the_house_door_leads_to_new_bark_town() {
     assert_eq!(view.camera_target, [last.x, last.y, last.z]);
     assert_eq!(view.objects[0].world_pos[0], last.x);
 }
+
+#[test]
+fn the_behavior_flags_table_reads_from_arm9() {
+    let Some(store) = open_rom() else {
+        return;
+    };
+    let field = FieldSystem::new_game(&store, 0).unwrap();
+    let flags = field.behavior_flags();
+    // sMetatileBehaviorFlags (src/metatile_behavior.c:7): the water
+    // behaviours 16-21 and 25 are surfable, tall grass (2) an
+    // encounter tile, 0 neither; fifteen of each flag over the table.
+    assert!(flags.surfable(21), "WATER_SEA");
+    assert!(flags.surfable(16), "WATER_RIVER");
+    assert!(flags.encounter(21) && flags.encounter(16));
+    assert!(flags.encounter(2) && !flags.surfable(2), "TALL_GRASS");
+    assert!(!flags.surfable(0) && !flags.encounter(0));
+    assert!(!flags.surfable(22) && !flags.surfable(23), "puddles are walked");
+    let surfable = (0..=u8::MAX).filter(|&b| flags.surfable(b)).count();
+    let encounter = (0..=u8::MAX).filter(|&b| flags.encounter(b)).count();
+    assert_eq!((surfable, encounter), (15, 15));
+}
+
+/// East of the front door along z = 397: eight walkable tiles, then
+/// the pond — behaviour 21 with bit 15 clear, blocked only by the
+/// surfable-water rule.
+#[test]
+fn the_pond_blocks_without_a_wall_bit() {
+    let Some(store) = open_rom() else {
+        return;
+    };
+    let mut field = FieldSystem::enter(&store, Location::new(60, 1, 0, 0, Direction::South), 0)
+        .expect("New Bark Town loads");
+    assert_eq!(tile(&field), (695, 396));
+    while !field.movement_allowed() {
+        field.tick(Input::default(), &store);
+    }
+    for _ in 0..8 {
+        field.tick(held(key::DOWN), &store);
+    }
+    assert_eq!(tile(&field), (695, 397));
+    // A release tick: a direction change while still walking would
+    // turn-and-step in one command (sub_0205D40C).
+    field.tick(Input::default(), &store);
+    let terrain = field.terrain();
+    use apricorn_core::field::map_object::Collision;
+    assert_eq!(terrain.attr(704, 397), 0x0015);
+    assert!(!terrain.impassable(704, 397));
+    assert!(terrain.surfable(704, 397));
+    assert!(!terrain.surfable(703, 397));
+    // Turn (3) + eight steps (64) to (703, 397).
+    for _ in 0..67 {
+        field.tick(held(key::RIGHT), &store);
+    }
+    assert_eq!(tile(&field), (703, 397));
+    assert_eq!(field.avatar().object.position, VecFx32::from_tile(703, 0, 397));
+    field.tick(held(key::RIGHT), &store);
+    assert_eq!(field.last_outcome(), Some(MoveOutcome::Bump(Direction::East)));
+    for _ in 0..17 {
+        field.tick(held(key::RIGHT), &store);
+    }
+    assert_eq!(tile(&field), (703, 397));
+    assert_eq!(field.avatar().object.position, VecFx32::from_tile(703, 0, 397));
+}

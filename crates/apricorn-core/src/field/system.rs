@@ -534,15 +534,76 @@ pub const SPRITE_OFFSET: VecFx32 = VecFx32 {
 // Terrain as the movement code sees it
 // ---------------------------------------------------------------------------
 
+/// pret's `sMetatileBehaviorFlags` (`src/metatile_behavior.c:7`): one
+/// byte per behaviour — bit 0 `TILE_BEHAVIOR_FLAG_SURFABLE`, bit 1
+/// `TILE_BEHAVIOR_FLAG_ENCOUNTER` — read from the ARM9 image at
+/// [`Self::ADDRESS`] (located by its 237-byte pattern; unique in the
+/// retail US image). `MetatileBehavior_IsSurfableWater` is what keeps
+/// the player off New Bark Town's pond, whose tiles carry behaviour 21
+/// (`WATER_SEA`) with bit 15 clear.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BehaviorFlags(Vec<u8>);
+
+impl BehaviorFlags {
+    /// The table's RAM address in the retail US ARM9 image.
+    pub const ADDRESS: u32 = 0x020F_CA74;
+    /// Entries: `TILE_BEHAVIOR_0` … `TILE_BEHAVIOR_236`.
+    pub const LEN: usize = 237;
+
+    /// Reads the table out of the ARM9 image.
+    ///
+    /// # Errors
+    /// Returns an [`AssetsError`] when the image cannot be expanded or is
+    /// shorter than the table's end.
+    pub fn load(store: &AssetStore) -> Result<Self, AssetsError> {
+        let image = store.arm9_image()?;
+        let start = usize::try_from(Self::ADDRESS - store.arm9_base()).map_err(|_| {
+            AssetsError::Missing("metatile behaviour flags below the ARM9 base".into())
+        })?;
+        let bytes = image.get(start..start + Self::LEN).ok_or_else(|| {
+            AssetsError::Missing("metatile behaviour flags past the ARM9 image".into())
+        })?;
+        Ok(Self(bytes.to_vec()))
+    }
+
+    /// The flags byte of `behavior` (0 past the table).
+    #[must_use]
+    pub fn flags(&self, behavior: u8) -> u8 {
+        self.0.get(usize::from(behavior)).copied().unwrap_or(0)
+    }
+
+    /// `MetatileBehavior_IsSurfableWater`: bit 0.
+    #[must_use]
+    pub fn surfable(&self, behavior: u8) -> bool {
+        self.flags(behavior) & 1 != 0
+    }
+
+    /// `MetatileBehavior_IsEncounterTile` (`:459`): bit 1.
+    #[must_use]
+    pub fn encounter(&self, behavior: u8) -> bool {
+        self.flags(behavior) & 2 != 0
+    }
+}
+
 /// The loaded map's terrain attributes as the collision code reads them
 /// (`GetMetatileBehavior` / `sub_020548C0`): a tile whose cell is not
-/// resident answers [`ATTR_NONE`].
+/// resident answers [`ATTR_NONE`]; surfable water comes from the ROM's
+/// behaviour-flags table.
 #[derive(Debug, Clone, Copy)]
-pub struct SceneTerrain<'a>(pub &'a TerrainAttributes);
+pub struct SceneTerrain<'a> {
+    /// The scene's attribute window.
+    pub attrs: &'a TerrainAttributes,
+    /// The behaviour flags table.
+    pub flags: &'a BehaviorFlags,
+}
 
 impl Collision for SceneTerrain<'_> {
     fn attr(&self, x: i32, z: i32) -> u16 {
-        self.0.attr(x, z).unwrap_or(ATTR_NONE)
+        self.attrs.attr(x, z).unwrap_or(ATTR_NONE)
+    }
+
+    fn surfable(&self, x: i32, z: i32) -> bool {
+        self.flags.surfable(self.behavior(x, z))
     }
 }
 
@@ -691,6 +752,7 @@ pub enum FieldPhase {
 #[derive(Debug)]
 pub struct FieldSystem {
     scene: Arc<FieldScene>,
+    flags: BehaviorFlags,
     avatar: PlayerAvatar,
     sprite: PlayerSprite,
     gender: u8,
@@ -734,11 +796,13 @@ impl FieldSystem {
     /// load.
     pub fn enter(store: &AssetStore, location: Location, gender: u8) -> Result<Self, AssetsError> {
         let sprite = PlayerSprite::load(store, gender)?;
+        let flags = BehaviorFlags::load(store)?;
         let (scene, location) = Self::load_location(store, location, gender)?;
         let avatar = Self::create_avatar(&location, gender);
         let camera = scene.camera;
         let mut system = Self {
             scene: Arc::new(scene),
+            flags,
             avatar,
             sprite,
             gender,
@@ -830,6 +894,21 @@ impl FieldSystem {
     #[must_use]
     pub fn sprite(&self) -> &PlayerSprite {
         &self.sprite
+    }
+
+    /// The ROM's behaviour flags table.
+    #[must_use]
+    pub fn behavior_flags(&self) -> &BehaviorFlags {
+        &self.flags
+    }
+
+    /// The loaded scene's terrain as the movement code collides with it.
+    #[must_use]
+    pub fn terrain(&self) -> SceneTerrain<'_> {
+        SceneTerrain {
+            attrs: &self.scene.terrain,
+            flags: &self.flags,
+        }
     }
 
     /// `fieldSystem->location`: the map, warp and tile the player is on.
@@ -954,7 +1033,10 @@ impl FieldSystem {
                 self.avatar.player_move_state = PlayerMoveState::None;
                 self.avatar.clear_gear_and_flag2();
             } else {
-                let terrain = SceneTerrain(&self.scene.terrain);
+                let terrain = SceneTerrain {
+                    attrs: &self.scene.terrain,
+                    flags: &self.flags,
+                };
                 let outcome = self.avatar.move_control(&digest, &terrain);
                 self.last_outcome = Some(outcome);
             }
@@ -976,7 +1058,10 @@ impl FieldSystem {
 
         // 4. The object SysTask: movement step, then the sprite update.
         let report = {
-            let terrain = SceneTerrain(&self.scene.terrain);
+            let terrain = SceneTerrain {
+                attrs: &self.scene.terrain,
+                flags: &self.flags,
+            };
             self.avatar.object.tick(&terrain)
         };
         self.sprite.update(&self.avatar.object, report.ended);
