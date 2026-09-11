@@ -9,8 +9,9 @@ frames, the new-game fade-in, and the warp tasks between maps: bedroom
 the front door, and free walking around the town. `Game`'s terminal
 `Field` state runs it (`docs/game-flow.md`); the desktop and
 `apricorn-run` drive `Game`, so the arrows walk the player with no new
-keys. NPCs, scripts, menus, encounters, heights and the following
-Pokemon are later workstreams; the seams they fill are named below.
+keys. The player stands on the maps' BDHC ground heights. NPCs,
+scripts, menus, encounters and the following Pokemon are later
+workstreams; the seams they fill are named below.
 
 ## Architecture
 
@@ -20,6 +21,7 @@ Pokemon are later workstreams; the seams they fill are named below.
 | `FieldScene`: cells, props, terrain, events, camera preset (static, `Arc`) | `MapLoadManager`, `MapMatrix`, map headers | `field.rs` |
 | `PlayerAvatar` + `MapObject`: the move control and the step machine | `PlayerAvatar_MoveControl`, `sub_0205F12C` | `field/avatar.rs`, `field/map_object.rs` |
 | `FieldInput`: one tick's pad digest | `FieldInput_Update` | `field/input.rs` |
+| `height`: the BDHC plate solver behind the objects' elevation | `ov01_021FAE50`, `sub_02054654` | `field/height.rs` |
 | `PlayerSprite`: the hero's NSBTX frames and animation frame | `ov01_021F772C` and the sprite animation tables | `field/system.rs` |
 | `FieldFade`: the 6-step master-brightness fade | `BeginNormalPaletteFade`, `sub_02010B14` | `field/system.rs` |
 | `Transition`: a running warp task | `sub_02055DBC`, the exit/enter routine pairs | `field/system.rs` |
@@ -43,10 +45,16 @@ object's feet), the quad's size in world units and a `mirrored` flag for
 the classes that store one side view. Frames compare with `==` and
 replay without the system that produced them.
 
-`FieldFrame::static_scene` is the shim that keeps the Phase 4 goldens
-green: the header's preset at the player's tile with the scene's
-south-facing player image as the one object, what the bedroom landing
-showed. `apricorn_gfx::field::scene_view` turns any `FieldFrame` into
+`FieldFrame::static_scene` is the shim the Phase 4 renderer goldens
+(`bedroom_hg`, `field_hg`, `raster`) draw through: the header's preset
+at the player's tile with the scene's south-facing player image as the
+one object, what the bedroom landing showed. It places that object as
+the live system places a standing player — the tile centre at the
+cells' BDHC ground height for the camera target, plus `SPRITE_OFFSET`
+for the billboard — so the two paths pin the same anchor; the
+`field_hg` bedroom goldens were re-pinned when the shim took the
+offset (the hair box moved 5 px down onto the live frame's and the
+oracle's). `apricorn_gfx::field::scene_view` turns any `FieldFrame` into
 the rasterizer's `SceneView`; `preset_from_core` maps the ROM preset row
 (`perspectiveType` 0 is perspective, anything else orthographic) onto
 the gfx camera. The player's hero NSBTX (`a/0/8/1` member 69/70)
@@ -66,14 +74,16 @@ multiple of 8) is pinned by `walk_cycle_alternates_legs_as_the_oracle_shows`.
 
 ### The sprite's anchor
 
-The billboard's anchor is the object's position vector plus
-`SPRITE_OFFSET` (6.5 world units toward the camera on z): against the
-oracle's bedroom frame the player's image lands five pixels lower than
-a quad anchored at the tile centre's projection, and the offset
-reproduces that for the field cameras. Retail composes the position
-from two per-object offsets and six units of height
-(`ov01_021F93AC`, `ov01_021FA3E8`); the exact composition is still to
-be ported with the height solver (see Deferred).
+The billboard's anchor is the object's position vector (its y the
+ground height, see Heights) plus `SPRITE_OFFSET` (6.5 world units
+toward the camera on z): against the oracle's bedroom frame the
+player's image lands five pixels lower than a quad anchored at the
+tile centre's projection, and the offset reproduces that for the field
+cameras; with the ground height under it the New Bark frames match the
+oracle's too (the outline's rows 62-98 at (695, 397), frame 7372).
+Retail composes the position from two per-object offsets and six units
+of height (`ov01_021F93AC`, `ov01_021FA3E8`); the exact composition is
+still to be ported (see Deferred).
 
 ## Per-frame order vs pret
 
@@ -94,8 +104,10 @@ retail, so one `FieldSystem::tick` is one retail game tick. Through
    the camera at the player's position vector and the geometry and
    billboards submitted, the `FieldFrame` this tick returns, showing
    the objects where the previous tick's step left them.
-4. The SysTask queue: the map object's movement step (`sub_0205FD30`)
-   then its sprite update (`ov01_021F772C`).
+4. The SysTask queue: the map object's movement step (`sub_0205FD30`:
+   a stale height re-fetched, the held movement's step, whose walk
+   refreshes the height from the plates under the new position,
+   `sub_02061070`) then its sprite update (`ov01_021F772C`).
 5. After the VBlank, `HandleFadeUpdateFrame`'s brightness step, the
    register the returned frame carries.
 
@@ -122,7 +134,67 @@ surfable water comes from the ROM's `sMetatileBehaviorFlags`
 Town's pond is behaviour 21 (`WATER_SEA`) with bit 15 clear, blocked
 only by that rule. Ledges (`JUMP_*` behaviours) are detected but the
 hop is not runnable yet; the elevation rule (`sub_02054954`: a BDHC
-height step of `5 << 14` or more blocks) waits for the height solver.
+height step of `5 << 14` or more blocks) is not applied yet (see
+Deferred), though the solver it needs now exists.
+
+## Heights
+
+`field/height.rs` ports the BDHC plate solver, `ov01_021FAE50`
+(`asm/overlay_01_021FAD1C.s:207`) behind `sub_02054654`
+(`asm/unk_02054648.s:37`), the matrix-mode entry of the
+`fieldSystem->unk60` table `sub_02054940` dispatches to. A cell's BDHC
+block (`land::Bdhc`, six counted arrays: points `{x, z}`, slopes
+`{nx, ny, nz}`, heights `h`, plates `{point1, point2, slope, height}`,
+strips `{z, count, first}`, the access list of plate indices) describes
+the ground as plates: the rectangle two corner points span, on the
+plane `nx·x + ny·y + nz·z + h = 0`. For a position the solver runs the
+retail binary search over the strips' z boundaries (ported step for
+step, boundary answers included), tests the plates the strip's run of
+the access list names for containment, evaluates each hit as
+`y = -((nx·x + 0x800 >> 12) + (nz·z + 0x800 >> 12) + h) / ny` with
+`FX_Div`, and with several hits keeps the one nearest the current y
+(mode 0, the map object's), the highest (1) or the lowest (2), with
+the asm's sentinels and strictness. Positions are relative to the
+cell's centre (`(cell * 32 + 16) << 16` subtracted from the world
+position); `scene_height` finds the resident `LandCell` of the tile
+and answers `None` where no plate covers it or the cell is not
+resident, which is the lookup's "not found".
+
+`Collision::height_at` carries it to the movement code (`None` by
+default, so the terrains of the movement unit tests keep their objects
+at their creation elevation). `MapObject::update_height_from` is
+`sub_02061070`: `IGNORE_HEIGHTS` only clears `HEIGHT_STALE`; otherwise
+a found height becomes the position vector's y and, in 8-unit steps,
+the tile y (the previous one latched), clearing the flag; a miss sets
+it for the next tick's re-fetch. The step machine's walk step calls
+the source-less `update_height` (it does not carry the terrain), and
+`MapObject::tick` resolves the stale flag it leaves against the terrain
+right after the held movement — the same outcome as retail's in-step
+call, since nothing between reads the height. The player's object is
+created with `HEIGHT_STALE` (`sub_0205EC90`) and, the field overlay
+being up, fetched at once (`sub_0205EFB4` → `sub_0205EF8C`,
+`src/map_object.c:217,805`), so the first frame already targets the
+ground.
+
+Measured on the pinned ROM (`the_player_stands_at_the_bdhc_ground_height`):
+the bedroom's plate is at 0; New Bark Town's land surface is 16 units
+(`16 << 12`) under every tile of the walk, so the player, its tile y
+(2), the camera target and the billboard sit on it — the town frame
+moved down by the ground height's projection (the mailbox's top row
+50 → 62, the oracle's) and the whole body shows (outline rows 64-98
+against the oracle's 62-98) where before only the cap cleared the
+ground; 1F's floor plane is faintly tilted (140/4096 units at the
+stairs, 0.03) and the tile behind its stairs carries a raised plate
+(24724, 6.04 units). The stairs arrival places the player on that
+plate: `sub_02056AEC` looks the shifted position's height up
+(`sub_02054940`) before `sub_0205C810`, and the arrival walk's per-step
+refresh brings him down onto the floor, as retail does.
+
+Not ported: the dynamic terrain heights `sub_02054654` consults after
+the plates (`fieldSystem->dynamicTerrainHeightManager`,
+`ov01_021FB42C`; scripts register them for bridges — kind 2 of the
+lookup, gated by the object's `UNK29`), and the elevation collision
+rule above.
 
 ### The land section order
 
@@ -132,6 +204,10 @@ from `0x14 + extraSize`, New Bark's member 0 has its four door tiles
 (`0x8069`) exactly on the map's four warp events; read from `0x14`
 the grid is 44 words off and the pond had no water where the geometry
 shows it. `field/land.rs` and `tests/field_hg.rs` carry the evidence.
+`land.rs` belongs to the map-data workstream: the fix (`+24` lines,
+parse `extra` before `attributes`) needs reconciling with that branch
+at the merge rather than a silent revert — the test pins the
+door/warp coincidence so a revert cannot pass unnoticed.
 
 ## Warps
 
@@ -154,17 +230,33 @@ target map's warp entry supplies the tile at load, `sub_02052F94`) and
 records the entrance. Dynamic-warp anchors (`0x100`) need the save's
 dynamic warp, not carried yet.
 
-The task schedule (`Transition`), measured on the oracle's
-bedroom-to-1F stairs (fade-out at VBlank 5132, fade-in at 5220):
+The task schedule (`Transition`). The stairs column is measured on
+the oracle's bedroom-to-1F stairs (fade-out at VBlank 5132, fade-in at
+5220, two VBlanks per tick); the door column shares its exit walk and
+is read from the same routine shapes; the entrance column (the door
+out of 1F) is **not measured** — the oracle's walk stalls in Mom's
+scene before it — its fade-out tick comes from `sub_02056004`'s state
+order and its fade-to-fade interval is assumed equal to the stairs'.
 
 | tick | stairs / door | entrance |
 |---|---|---|
 | 0 | trigger (`FieldEvent::Warp`); movement stops | same |
 | 4-19 | the exit walk, `WalkSlower*` one tile in the facing direction | none |
-| 21 (3) | fade-out begins: six 1-frame steps, brightness -2, -5, -7, -10, -13, -16 | fade-out at tick 3 |
-| +7 | the destination loads; the player is placed (stairs: one tile into the wall behind the target stairs, facing back) | same |
-| +44 | fade-in begins with the arrival walk (`WalkSlower*`) | same |
-| +18 | the task unwinds; movement from the next tick | same |
+| 21 | fade-out begins: six 1-frame steps, brightness -2, -5, -7, -10, -13, -16 | fade-out at tick 3 (assumed) |
+| +7 | the destination loads; the player is placed (stairs: one tile into the wall behind the target stairs, at that tile's ground height, facing back) | same |
+| +44 | fade-in begins with the arrival walk (`WalkSlower*`) | same (assumed) |
+| +17 | the walk's end seen at +16, the fade's finish at +17: the task unwinds (`Transition::end_tick`) | same |
+| +18 | movement allowed | same |
+
+A destination that fails to load (a map or warp member missing from
+the store — no retail counterpart, where it would be a broken ROM)
+does not unwind the game: the transition is abandoned at the load
+tick, the current map fades back in with the player where the exit
+left him, and `FieldSystem::last_error` reports the `MapLoadError`
+(`a_warp_whose_map_fails_to_load_is_abandoned_on_the_current_map`).
+`FieldSystem::warp(destination, kind)` starts a transition from outside
+the input path — the seam for scripted warps (`sub_02055CD8` from a
+script's warp command); it runs the same schedule.
 
 The fade arithmetic is `sub_02010B14`'s (`asm/unk_0201010C.s:1486`):
 `current = start << 7`, `delta = ((end - start) << 7) / steps`, the
@@ -179,11 +271,16 @@ ninth tick.
 
 * `crates/apricorn-core/tests/field_system_hg.rs`: the fade-in, the
   pinned trajectories, walls, the turn-in-place rule, the stairs warp
-  with its timing, the door into New Bark Town, the camera target, the
-  behaviour-flags table and the pond.
+  with its timing (the wall plate's height on arrival), the door into
+  New Bark Town, the camera target, the behaviour-flags table, the
+  pond, the BDHC ground heights of the three maps and the abandoned
+  warp. `field/height.rs`'s unit tests pin the solver's arithmetic,
+  strip search and modes on synthetic blocks.
 * `crates/apricorn-gfx/tests/field_system_hg.rs`: SHA-1 goldens of the
   bedroom mid-step, house 1F on arrival and New Bark Town on arrival
-  (`APRICORN_RENDER_OUT` writes `field-system-*.png`).
+  (`APRICORN_RENDER_OUT` writes `field-system-*.png`); the 1F and New
+  Bark hashes were re-pinned with the heights (the constants' doc
+  carries the before/after landmark rows).
 * `scripts/engine-walk.apin` continues `scripts/engine-new-game.apin`:
   bedroom, stairs, 1F, the front door, New Bark Town, the pond's rim,
   west along the path, south past the lab. Milestone frames:
@@ -196,11 +293,13 @@ ninth tick.
 
   3010 bedroom faded in; 3040 walking west; 3066 at the stairs; 3071
   the warp trigger; 3090 the exit walk done; 3095 fading out; 3130
-  black; 3140 1F fading in; 3153 arrival on the stairs; 3200 down the
+  black; 3140 1F fading in (the player on the wall tile's raised
+  plate, walking out); 3153 arrival on the stairs; 3200 down the
   hall; 3222 the door's fade-out; 3270 New Bark fading in; 3290 off
-  the door; 3320 walking south; 3372 the pond's rim; 3460 west along
+  the door, standing on the town's ground (the oracle's frame 7372
+  framing); 3320 walking south; 3372 the pond's rim; 3460 west along
   the path; 3514 the west end; 3600 south past the lab; 3659 the tree
-  line.
+  line, the canopies over the body as in retail.
 
 ## Deferred
 
@@ -213,12 +312,10 @@ ninth tick.
   touch screen (engine B stays black; its frame structure is intact).
 * **Encounters**: `EncounterSteps` counts; `BehaviorFlags::encounter`
   is read from the table; nothing rolls yet.
-* **BDHC heights**: the player stays at y = 0 with `IGNORE_HEIGHTS`.
-  New Bark's land surface is at y = 16, so the billboard sits 16 units
-  under the ground plane: at the tree line (686, 412) the canopies
-  (land geometry up to y = 65) hide all but the cap, more than retail.
-  The height solver also unblocks the elevation rule above and the
-  exact sprite-anchor composition.
+* **Heights, the rest**: the dynamic terrain heights (bridges, by
+  script), the elevation collision rule (`sub_02054954`), the exact
+  sprite-anchor composition (`ov01_021F93AC`) now that the position
+  vector carries the ground height.
 * **Prop fidelity**: `a/1/4/8` member 28 (`machine_l02`, the windmill
   blade layer) decodes as a 765 x 740-unit plane at y = 160, the thin
   white streaks across the town frames; the oracle draws short crosses
