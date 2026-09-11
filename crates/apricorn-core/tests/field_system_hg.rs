@@ -411,8 +411,9 @@ fn the_behavior_flags_table_reads_from_arm9() {
     assert_eq!((surfable, encounter), (15, 15));
 }
 
-/// East of the front door along z = 397: eight walkable tiles, then
-/// the pond — behaviour 21 with bit 15 clear, blocked only by the
+/// South-east of the front door: from (695, 398) five walkable tiles
+/// east end on the pond's rim (700, 398), and the water at (701, 398)
+/// — behaviour 21 with bit 15 clear — is blocked only by the
 /// surfable-water rule.
 #[test]
 fn the_pond_blocks_without_a_wall_bit() {
@@ -425,30 +426,32 @@ fn the_pond_blocks_without_a_wall_bit() {
     while !field.movement_allowed() {
         field.tick(Input::default(), &store);
     }
-    for _ in 0..8 {
+    for _ in 0..16 {
         field.tick(held(key::DOWN), &store);
     }
-    assert_eq!(tile(&field), (695, 397));
+    assert_eq!(tile(&field), (695, 398));
     // A release tick: a direction change while still walking would
     // turn-and-step in one command (sub_0205D40C).
     field.tick(Input::default(), &store);
     let terrain = field.terrain();
     use apricorn_core::field::map_object::Collision;
-    assert_eq!(terrain.attr(704, 397), 0x0015);
-    assert!(!terrain.impassable(704, 397));
-    assert!(terrain.surfable(704, 397));
-    assert!(!terrain.surfable(703, 397));
-    // Turn (3) + eight steps (64) to (703, 397).
-    for _ in 0..67 {
+    assert_eq!(terrain.attr(695, 396), 0x8069, "the door tile above the spawn");
+    assert_eq!(terrain.attr(701, 398), 0x0015);
+    assert!(!terrain.impassable(701, 398));
+    assert!(terrain.surfable(701, 398));
+    assert_eq!(terrain.attr(700, 398), 0x0400, "the rim");
+    assert!(!terrain.surfable(700, 398));
+    // Turn (3) + five steps (40) to (700, 398).
+    for _ in 0..43 {
         field.tick(held(key::RIGHT), &store);
     }
-    assert_eq!(tile(&field), (703, 397));
-    assert_eq!(field.avatar().object.position, VecFx32::from_tile(703, 0, 397));
+    assert_eq!(tile(&field), (700, 398));
+    assert_eq!(field.avatar().object.position, VecFx32::from_tile(700, 0, 398));
     field.tick(held(key::RIGHT), &store);
     assert_eq!(field.last_outcome(), Some(MoveOutcome::Bump(Direction::East)));
     for _ in 0..17 {
         field.tick(held(key::RIGHT), &store);
     }
-    assert_eq!(tile(&field), (703, 397));
-    assert_eq!(field.avatar().object.position, VecFx32::from_tile(703, 0, 397));
+    assert_eq!(tile(&field), (700, 398));
+    assert_eq!(field.avatar().object.position, VecFx32::from_tile(700, 0, 398));
 }

@@ -5,14 +5,19 @@
 //! Header (0x14 bytes, `TERRAIN_ATTRIBUTES_OFFSET` in pret
 //! `include/terrain_attributes.h:11`): `u32 attrSize (0x800), propSize
 //! (0x30 × n), modelSize, bdhcSize; u16 magic 0x1234; u16 extraSize`.
-//! The sections follow contiguously in this order — measured on the
-//! retail members with an extra section (0, 4, 5: `BMD0` sits at
-//! `0x14 + attr + extra + prop`):
+//! The sections follow contiguously in this order — `BMD0` sits at
+//! `0x14 + extra + attr + prop` on the retail members with an extra
+//! section (0, 4, 5), and the **extra section comes first**: on New
+//! Bark Town's member 0 (88 extra bytes) the four door tiles (`0x8069`)
+//! coincide with the map's four warp events only when the attribute
+//! grid starts at `0x14 + extraSize` (pret's `TERRAIN_ATTRIBUTES_OFFSET`
+//! of 0x14 serves the separate-block load modes; the field overlay's
+//! loader hands out per-cell pointers, `ov01_021F65E4`):
 //!
 //! ```text
-//! attrs  0x800   u16 per tile, index (x % 32) + (z % 32) * 32
-//! extra  extraSize   u16 words that look like attributes (0x8006 runs);
+//! extra  extraSize   u16 words, attribute-like (fence and tree runs);
 //!                    undocumented in pret, kept raw
+//! attrs  0x800   u16 per tile, index (x % 32) + (z % 32) * 32
 //! props  0x30 each   MapPropArcData (src/field/map_prop_manager.c:13)
 //! model  modelSize   BMD0 (the cell's ground/walls)
 //! bdhc   bdhcSize    "BDHC" height data (undocumented in pret)
@@ -34,7 +39,8 @@ use crate::nds::{NdsError, u16le, u32le};
 pub const LAND_NARC: &str = "a/0/6/5";
 /// Members in the retail archive.
 pub const LAND_COUNT: usize = 676;
-/// Header bytes before the attribute section.
+/// Header bytes before the extra section (and, on members without one,
+/// the attribute section).
 pub const HEADER_SIZE: usize = 0x14;
 /// Bytes in the attribute section (`TERRAIN_ATTRIBUTES_SIZE`).
 pub const ATTRIBUTE_BYTES: usize = 0x800;
@@ -273,12 +279,12 @@ impl LandData {
             p += n;
             s
         };
+        let extra = take(usize::from(sizes.extra)).to_vec();
         let attr_bytes = take(ATTRIBUTE_BYTES);
         let mut attributes = [0u16; ATTRIBUTE_COUNT];
         for (i, a) in attributes.iter_mut().enumerate() {
             *a = u16le(attr_bytes, i * 2)?;
         }
-        let extra = take(usize::from(sizes.extra)).to_vec();
         let props = take(sizes.props as usize)
             .chunks_exact(PROP_RECORD_SIZE)
             .map(PropPlacement::parse)
@@ -330,10 +336,10 @@ mod tests {
         b.extend_from_slice(&(bdhc.len() as u32).to_le_bytes());
         b.extend_from_slice(&MAGIC.to_le_bytes());
         b.extend_from_slice(&(extra as u16).to_le_bytes());
+        b.extend(std::iter::repeat_n(0xEE, extra));
         for i in 0..ATTRIBUTE_COUNT {
             b.extend_from_slice(&(i as u16).to_le_bytes());
         }
-        b.extend(std::iter::repeat_n(0xEE, extra));
         for i in 0..props {
             let mut r = [0u8; PROP_RECORD_SIZE];
             r[..4].copy_from_slice(&(i as u32 + 1).to_le_bytes());
@@ -360,7 +366,7 @@ mod tests {
     }
 
     #[test]
-    fn sections_are_laid_out_attrs_extra_props_model_bdhc() {
+    fn sections_are_laid_out_extra_attrs_props_model_bdhc() {
         let block = bdhc([2, 1, 3, 1, 1, 4]);
         let land = LandData::parse(&member(8, 2, &block)).unwrap();
         assert_eq!(land.sizes.extra, 8);
