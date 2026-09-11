@@ -767,23 +767,6 @@ impl AssetStore {
         Ok((entry, image))
     }
 
-    /// The raw bytes of the NitroFS file at `path` (e.g.
-    /// `data/area00light.txt`) — pret's `Sys_AllocAndReadFile` by
-    /// path: no member indirection and no compression sniff, the file
-    /// exactly as the cart stores it.
-    ///
-    /// # Errors
-    /// Returns an [`AssetsError`] when no NitroFS file has that path.
-    pub fn nitrofs_file(&self, path: &str) -> Result<Vec<u8>, AssetsError> {
-        let rom = NdsRom::parse(&self.rom).map_err(|source| AssetsError::Corrupt {
-            what: "ROM".to_owned(),
-            source,
-        })?;
-        rom.file_by_path(path)
-            .map(<[u8]>::to_vec)
-            .map_err(|_| AssetsError::Missing(format!("no NitroFS file {path}")))
-    }
-
     /// Stores `asset`, returning its handle.
     fn push(&mut self, asset: Asset) -> AssetId {
         let id = AssetId::from_index(self.assets.len());
