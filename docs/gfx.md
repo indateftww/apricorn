@@ -301,7 +301,13 @@ pitch `0xDC82`, half-angle `0x281`; both near 150, far 1200 / 1736.
   Orthographic (`Camera_ApplyPerspectiveType`, `camera.c:271-274`):
   `y = FX_Mul(FX_Div(fovySin, fovyCos), distance)`, `x = FX_Mul(y,
   aspect)`, `MTX_OrthoW(y, −y, −x, x, n, f)` — the extents are computed
-  in fx32 exactly as the C does (95.8125 × 127.7422 for preset 4). The
+  in fx32 exactly as the C does (95.8125 × 127.7422 for preset 4).
+  `FX_Mul` is `(a·b + 0x800) >> 12`; `FX_Div` runs the hardware
+  divider in 64/32 mode with 20 guard bits and rounds half up,
+  `((a << 32) / b + 0x80000) >> 20` (`lib/NitroSDK/asm/fx_cp.s`
+  `FX_DivAsync`/`FX_GetDivResult`) — not a truncating `(a << 12) / b`;
+  for preset 4 the quotient 251.49 lands on 251 either way, but a
+  preset whose tangent has a fraction ≥ .5 LSB rounds up. The
   aspect is `FX32_CONST(1.33333333)` = 5461/4096. Both presets scale
   ≈1 world unit to 1 pixel at the target depth, which is why the
   32-unit sprite quads are 32 px tall.

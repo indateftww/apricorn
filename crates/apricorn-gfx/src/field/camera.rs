@@ -6,7 +6,8 @@
 //! 16-bit units (`0x10000` = 360°) looked up in `FX_SinCosTable_`
 //! (`lib/include/nitro/fx/fx_trig.h:20-26`: 4096 `(sin, cos)` pairs of
 //! fx16, indexed by `angle >> 4`), distances are fx32 (12 fractional
-//! bits), and `FX_Mul`/`FX_Div` round and truncate as the ARM does.
+//! bits), and `FX_Mul`/`FX_Div` round half up as the ARM and the
+//! hardware divider do.
 //! This port reproduces that arithmetic wherever the original does it
 //! in fixed point — the camera position, the ortho extents, the
 //! billboard bias — and only then moves to `f64` for the matrices,
@@ -81,15 +82,23 @@ pub fn fx_mul(a: i64, b: i64) -> i64 {
     (a * b + 0x800) >> 12
 }
 
-/// `FX_Div(a, b)`: fx32 ÷ fx32 through the hardware divider,
-/// `(a << 12) / b` truncated toward zero.
+/// `FX_Div(a, b)`: fx32 ÷ fx32 through the hardware divider in its
+/// 64/32 mode with 20 guard bits, rounded half up —
+/// `lib/NitroSDK/asm/fx_cp.s` `FX_DivAsync` writes `DIVCNT = 1`,
+/// `NUMER = a << 32`, `DENOM = b`, and `FX_GetDivResult` returns
+/// `((a << 32) / b + 0x80000) >> 20` (`adds r2, r1, #0x80000; adc r1,
+/// r0, #0; mov r0, r2, lsr #0x14; orr r0, r0, r1, lsl #12`). The
+/// divider truncates the quotient toward zero; the `+ 0x80000`
+/// (half of the 20 dropped bits) then rounds it to the nearest fx32,
+/// halves up.
 ///
 /// # Panics
 /// Panics on a zero divisor, as the divider would flag.
 #[must_use]
 pub fn fx_div(a: i64, b: i64) -> i64 {
     assert!(b != 0, "FX_Div by zero");
-    (a << 12) / b
+    let quotient = (i128::from(a) << 32) / i128::from(b);
+    i64::try_from((quotient + 0x8_0000) >> 20).expect("FX_Div result fits an i64")
 }
 
 /// `CameraParam.perspectiveType` (`include/camera.h:14-15`).
@@ -461,8 +470,23 @@ mod tests {
         assert_eq!(fx_mul(2048, 2048), 1024);
         assert_eq!(fx_mul(1, 2048), 1);
         assert_eq!(fx_div(FX32_ONE.into(), 2048), 2 * i64::from(FX32_ONE));
-        // Truncation toward zero, as the divider does.
+        // FX_Div rounds half up through 20 guard bits: 251/4088 in fx32
+        // is 251.49 LSB, which rounds down to 251.
         assert_eq!(fx_div(251, 4088), 251);
+        // Exactly half an LSB (1/8192 in fx32 = 0.5 LSB) rounds up;
+        // one part in 8193 falls short of the half and rounds down.
+        // Truncation, which the divider alone would give, yields 0 for
+        // both.
+        assert_eq!(fx_div(1, 8192), 1);
+        assert_eq!(fx_div(1, 8193), 0);
+        // The half-up rounding is toward +infinity on negatives too:
+        // −0.5 LSB → 0, −1.5 LSB → −1 (the divider's quotient is
+        // truncated toward zero before the guard bits are rounded).
+        assert_eq!(fx_div(-1, 8192), 0);
+        assert_eq!(fx_div(-3, 8192), -1);
+        assert_eq!(fx_div(-1, 8193), 0);
+        // A quotient just above a half rounds up: 3/8191 = 1.5002 LSB.
+        assert_eq!(fx_div(3, 8191), 2);
     }
 
     #[test]
@@ -584,9 +608,8 @@ mod tests {
         assert!((expected - 1.0).abs() < 0.02);
 
         // Behind the eye projects to nothing.
-        assert!(
-            cam.project([target[0], 0, target[2] + 10_000 * FX32_ONE])
-                .is_none()
-        );
+        assert!(cam
+            .project([target[0], 0, target[2] + 10_000 * FX32_ONE])
+            .is_none());
     }
 }
