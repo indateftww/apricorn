@@ -76,6 +76,9 @@ const NUM_PHONE_CONTACTS: u16 = 75;
 const MAX_MONEY: u32 = 999_999;
 /// `MAPSIGNCOMMAND_SHOW` (`include/constants/scrcmd.h`).
 const MAPSIGNCOMMAND_SHOW: u8 = 1;
+/// `MAPSEC_MYSTERY_ZONE` (`include/constants/map_sections.h:4`) —
+/// `FieldSystem_MapIsNotMysteryZone` compares the map's section to it.
+const MAPSEC_MYSTERY_ZONE: u32 = 0;
 /// `NAME_SCREEN_RIVAL` / `NAME_SCREEN_POKEMON` (`include/naming_screen.h`).
 const NAME_SCREEN_RIVAL: u8 = 1;
 const NAME_SCREEN_POKEMON: u8 = 2;
@@ -1371,8 +1374,12 @@ pub(crate) fn execute(
 
         // ---- scene control ----
         Opcode::Cmd061 => {
-            // sub_0204031C: arm scrctx_end_cb (outside the Mystery Zone).
-            c.env.arm_end_callback();
+            // sub_0204031C (script_manager.c:334): arm scrctx_end_cb
+            // only when `FieldSystem_MapIsNotMysteryZone` — the map's
+            // section is not MAPSEC_MYSTERY_ZONE.
+            if c.query(FieldQuery::MapSec) != MAPSEC_MYSTERY_ZONE {
+                c.env.arm_end_callback();
+            }
             Continue
         }
 

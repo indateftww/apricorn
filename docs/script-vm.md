@@ -181,6 +181,9 @@ exactly where the C returns `TRUE`. Ported quirks worth knowing:
   reading `0xEEEE`. The port keeps the same register protocol: the
   choice lands in `data[0]`'s variable, and a `MenuExec` whose `data[0]`
   is not a variable (a NULL pointer in the C) is a `BadVar` error.
+* `ScrCmd_061` (`sub_0204031C`) arms `scrctx_end_cb` only when
+  `FieldSystem_MapIsNotMysteryZone` — the host's `FieldQuery::MapSec`
+  is not `MAPSEC_MYSTERY_ZONE` (0).
 * `NicknameInput 255` with no Bug Contest catch returns `TRUE` before
   reading its result operand, as the C does.
 * `ApplyMovement` on an object the host does not have is not an error

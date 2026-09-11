@@ -382,6 +382,11 @@ pub enum FieldQuery {
     },
     /// `ov01_021F6B00` — the lower-screen menu's current mode.
     TouchscreenMenuMode,
+    /// `MapHeader_GetMapSec(fieldSystem->location->mapId)` — the map's
+    /// section (`MAPSEC_*`, `include/constants/map_sections.h`);
+    /// `ScrCmd_061` arms the end callback only when it is not
+    /// `MAPSEC_MYSTERY_ZONE` (0).
+    MapSec,
 }
 
 /// A NATIVE-mode wait the host answers.

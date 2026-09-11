@@ -1400,14 +1400,18 @@ fn menu_exec_without_a_menu_init_variable_is_an_error() {
 
 #[test]
 fn bank_transaction_money_box_and_end_callback() {
-    let mut h = host(one(|a| {
+    let bank = one(|a| {
         a.op(Op::Cmd795).h(1).h(2);
         a.op(Op::BankTransaction).h(0).h(RESULT);
         a.op(Op::Cmd796);
         a.op(Op::Cmd061);
         a.op(Op::End);
-    }));
+    });
+    let mut h = host(bank.clone());
     h.poll_values.insert(WaitFor::BankTransaction, 1);
+    // MAPSEC_NEW_BARK_TOWN (126): not the Mystery Zone, so ScrCmd_061
+    // arms scrctx_end_cb.
+    h.queries.insert(FieldQuery::MapSec, 126);
     let mut e = env();
     let (_, status) = run(&mut e, &mut h, 20);
     assert_eq!(status, FrameStatus::Finished { callback: true });
@@ -1421,6 +1425,15 @@ fn bank_transaction_money_box_and_end_callback() {
         ]
     );
     assert_eq!(e.special_var(0xC), Some(1));
+
+    // In the Mystery Zone (MAPSEC_MYSTERY_ZONE, 0 — the mock's default
+    // answer) sub_0204031C leaves the callback alone.
+    let mut h = host(bank);
+    h.poll_values.insert(WaitFor::BankTransaction, 1);
+    let mut e = env();
+    let (_, status) = run(&mut e, &mut h, 20);
+    assert_eq!(status, FrameStatus::Finished { callback: false });
+    assert!(!e.end_callback_armed());
 }
 
 // ---------------------------------------------------------------------
