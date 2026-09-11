@@ -273,8 +273,7 @@ the touch bottom screen (black), lighting applied to the renderer,
 bicycle/ledges/surf, the windmill prop's blade layer (decodes as a
 plane), and any map beyond New Bark Town's neighbours. The text-box
 "defects" seen in engine screenshots were measured against retail and
-are retail behavior (pinned by tests). Phase 6.1 (Pokémon data) and
-Phase 7 (audio) have partial branches parked unmerged.
+are retail behavior (pinned by tests).
 
 How to regression test this checkpoint (from this branch):
 `cargo run -p apricorn-desktop -- --rom hg_usa.nds` — play through the
@@ -287,15 +286,6 @@ Picking this up later:
 
 - Phase 5 work was done on branch `claude/game-development-progress-fda06c`
   and is being merged into `main` by the user; continue from `main`.
-- Two unreviewed partial branches are parked, each one WIP commit off
-  `ac469ad`: `parked/phase6-pokemon-data` (Pokémon encryption/party/
-  bag/Pokédex views, `docs/pokemon.md`) and `parked/phase7-audio` (the
-  `apricorn-audio` crate). Both build (checked 2026-09-11) but are NOT
-  mergeable yet: the Pokémon branch fails 7 of 23 tests including all
-  six arm-runner differentials against the original accessors, and the
-  audio crate fails 2 of 46 unit tests. Rebase onto `main`, fix, review,
-  then merge; nothing in the game calls them, so they are parked, not
-  blocking.
 - Worktree setup for a fresh checkout (the inputs are gitignored): copy
   or hardlink `hg_usa.nds` and `hg.sav` into the checkout root, clone
   `refs/pokeheartgold` and `refs/melonds`, build the oracle with
@@ -333,8 +323,7 @@ Picking this up later:
    their events.
 4. **Movement slices** — running shoes/B-run, ledges/jumps, bicycle,
    surf (behaviour flags and step machine already carry the seams).
-5. **Menus** — bag and party screens with their touch versions
-   (Phase 6.1's party/bag data views are on the parked branch), the
+5. **Menus** — bag and party screens with their touch versions, the
    unselected-icon OAM dimming in the start menu.
 6. **Known fidelity gaps** — the windmill prop's blade layer (bm_field
    member 28) decodes as a flat plane; the door-out transition schedule
@@ -344,8 +333,7 @@ Picking this up later:
    NPC RNG draws compared by trace, then the user's regression test and
    acceptance.
 
-Phases 6–9 keep their own checklists below; Phase 6.1 and Phase 7's
-first slice have parked partial branches.
+Phases 6–9 keep their own checklists below.
 
 - [ ] Map engine: HGSS's map/BG layers, collision, warp/door transitions,
       camera.
@@ -437,12 +425,9 @@ validated by replay traces against the oracle.
 
 The largest single phase; break into sub-milestones.
 
-- [ ] Party, PC boxes, bag/items, Pokédex data structures.
-      - [ ] Pokémon encryption/shuffle/checksum, party, player data,
-            bag and Pokédex views over the real save blocks, verified
-            on the retail save and against the original segment
-            crypt via arm-runner. → `apricorn-core::pokemon`,
-            `save::{player_data,bag,pokedex}`, `docs/pokemon.md`
+- [ ] Party, PC boxes, bag/items, Pokédex data structures (encryption/
+      shuffle/checksum verified on the retail save and against the
+      original accessors via arm-runner).
 - [ ] Wild encounters: encounter tables, RNG-driven selection, shiny rolls.
 - [ ] Battle core: turn order, damage/stat/status formulas (each
       differential-tested against original ARM functions), type chart,
@@ -462,9 +447,6 @@ stat/damage/RNG tests green in CI.
 
 - [ ] SDAT playback: SSEQ (sequences), SWAR/STRM (samples/streams) — either a
       Rust synth or wrap an existing playback core; hooked into game events.
-      - [ ] Offline deterministic renderer (SSEQ sequencer + SBNK/SWAR
-            synth + 16-channel mixer, hash-pinned PCM) as the new
-            `apricorn-audio` crate. → `docs/audio.md`
 - [ ] Jingle/mixer behavior matching original channel usage so audio traces
       (sequence position per frame) can join the equivalence harness.
 
