@@ -1,7 +1,7 @@
 //! Map-prop time-of-day visual state — the bucket-driven animation
 //! slot swap of `src/field/overlay_01_02204004.c`: `sTimeOfDayVisualState`
 //! (`:473`) folds the five [`TimeOfDay`] buckets into four slots,
-//! `ov01_02204718`-era init stores `GF_RTC_GetTimeOfDay()` (`:441`),
+//! `ov01_02204744` (`FieldSystemUnkSub104_Init`) stores `GF_RTC_GetTimeOfDay()` (`:441`),
 //! and the per-frame `ov01_022047DC` (`:481`,
 //! `FieldSystemUnkSub104_SwitchTimeOfDay`, called from
 //! `fieldmap.c:422` right after the area light update) compares the
