@@ -17,9 +17,19 @@ const ROM_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../hg_usa.nds");
 /// player mid-tile, the camera with him), house 1F at the first fully
 /// faded-in tick after the stairs, New Bark Town at the first fully
 /// faded-in tick after the front door.
+///
+/// Re-pinned with the BDHC height solver (`field::height`): the player
+/// and the camera target sit on the land surface, so New Bark Town's
+/// frame moved down by the 16-unit ground height (the mailbox's top
+/// row 50 → 62, the oracle's 62; the player's outline rows 52-90, the
+/// cap alone, → 64-98, the whole body, the oracle's 62-98 at frame
+/// 7372) and 1F's faintly tilted floor (0.03 units) re-rasterized the
+/// billboard's edges without moving a landmark (outline rows 30-97
+/// before and after, the oracle's 30-99). The bedroom's plate is at 0
+/// and its hash is unchanged.
 const BEDROOM_MID_STEP: &str = "0867fcf6cf096f3b1aae90cf6b8ad00e9851a213";
-const HOUSE_1F_ARRIVAL: &str = "75715d470becdf2cce767916d43d6e593fc47484";
-const NEW_BARK_ARRIVAL: &str = "52a6887fcca2acdfc3c82c0d9825e4e28c519a83";
+const HOUSE_1F_ARRIVAL: &str = "99fe2418595825c63b2e6ed2ac774fd67fb69622";
+const NEW_BARK_ARRIVAL: &str = "702d762517b6563eab476d612fc48ac2bd327982";
 
 fn open_rom() -> Option<AssetStore> {
     let path = Path::new(ROM_PATH);

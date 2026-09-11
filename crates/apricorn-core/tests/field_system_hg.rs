@@ -6,7 +6,7 @@
 
 use apricorn_core::assets::AssetStore;
 use apricorn_core::field::avatar::MoveOutcome;
-use apricorn_core::field::map_object::{Direction, VecFx32};
+use apricorn_core::field::map_object::{Collision, Direction, FX32_ONE, VecFx32};
 use apricorn_core::field::system::{
     FieldEvent, FieldPhase, FieldSystem, Location, Transition, TransitionKind, TransitionStage,
 };
@@ -301,10 +301,16 @@ fn the_stairs_warp_to_the_house_with_the_measured_timing() {
     // T+65: the fade-in begins and the arrival walk (WalkSlowerEast)
     // starts in the same tick; the frame still shows the previous
     // position (display latency) and the fade's first step.
+    // The wall tile behind the stairs carries a raised BDHC plate (land
+    // 216, 6.04 units): sub_02056AEC places the player at its height
+    // and the arrival walk's per-step refresh brings it down onto the
+    // faintly tilted floor (0.03 units at the stairs), as retail does.
     let wall = VecFx32::from_tile(2, 0, 3);
+    let wall_y = field.terrain().height_at(wall.x, 0, wall.z).expect("a plate in the wall");
+    assert_eq!(wall_y, 24724);
     field.tick(Input::default(), &store);
     assert_eq!(field.frame().main.brightness, down(13));
-    assert_eq!(field.frame().main.field.as_ref().unwrap().camera_target, [wall.x, 0, wall.z]);
+    assert_eq!(field.frame().main.field.as_ref().unwrap().camera_target, [wall.x, wall_y, wall.z]);
     assert_eq!(field.avatar().object.position.x, wall.x + 0x1000);
     assert_eq!(field.transition().unwrap().stage, TransitionStage::Enter);
     let mut brightness = vec![];
@@ -315,7 +321,10 @@ fn the_stairs_warp_to_the_house_with_the_measured_timing() {
     }
     assert_eq!(&brightness[..5], &[down(10), down(8), down(5), down(2), MasterBrightness::default()]);
     assert_eq!(tile(&field), (3, 3));
-    assert_eq!(field.avatar().object.position, VecFx32::from_tile(3, 0, 3));
+    let stairs = VecFx32::from_tile(3, 0, 3);
+    let stairs_y = field.terrain().height_at(stairs.x, 0, stairs.z).expect("the floor plate");
+    assert_eq!(stairs_y, 140);
+    assert_eq!(field.avatar().object.position, VecFx32 { y: stairs_y, ..stairs });
     assert!(!field.movement_allowed());
     field.tick(Input::default(), &store);
     assert!(!field.movement_allowed(), "the routine sees the walk's end");
@@ -353,11 +362,12 @@ fn the_house_door_leads_to_new_bark_town() {
     assert_eq!(field.entrance(), Location::new(63, 0, 3, 10, Direction::South));
     // The entrance exit fades at once (T+3) — no walk.
     let mat = VecFx32::from_tile(3, 0, 10);
+    let mat_y = field.terrain().height_at(mat.x, 0, mat.z).expect("the floor plate");
     for _ in 1..=3 {
         field.tick(held(key::DOWN), &store);
     }
     assert_eq!(field.frame().main.brightness, down(2));
-    assert_eq!(field.avatar().object.position, mat);
+    assert_eq!(field.avatar().object.position, VecFx32 { y: mat_y, ..mat });
     let mut ticks = 3;
     while field.transition().is_some() {
         field.tick(held(key::DOWN), &store);
@@ -367,9 +377,11 @@ fn the_house_door_leads_to_new_bark_town() {
     assert_eq!(ticks, t.end_tick());
     assert_eq!(field.scene().map_id, 60);
     assert_eq!(field.location(), Location::new(60, 1, 695, 396, Direction::South));
-    // The arrival walk carried the player one tile south off the door.
+    // The arrival walk carried the player one tile south off the door,
+    // on the town's land surface: y = 16 units, tile y 2.
     assert_eq!(tile(&field), (695, 397));
-    assert_eq!(field.avatar().object.position, VecFx32::from_tile(695, 0, 397));
+    assert_eq!(field.avatar().object.position, VecFx32::from_tile(695, 2, 397));
+    assert_eq!(field.avatar().object.current, [695, 2, 397]);
     assert!(field.scene().cells.len() >= 4, "the town's cell window");
     assert!(!field.scene().props.is_empty());
     // Outdoors: preset 0, perspective.
@@ -434,7 +446,6 @@ fn the_pond_blocks_without_a_wall_bit() {
     // turn-and-step in one command (sub_0205D40C).
     field.tick(Input::default(), &store);
     let terrain = field.terrain();
-    use apricorn_core::field::map_object::Collision;
     assert_eq!(terrain.attr(695, 396), 0x8069, "the door tile above the spawn");
     assert_eq!(terrain.attr(701, 398), 0x0015);
     assert!(!terrain.impassable(701, 398));
@@ -446,12 +457,48 @@ fn the_pond_blocks_without_a_wall_bit() {
         field.tick(held(key::RIGHT), &store);
     }
     assert_eq!(tile(&field), (700, 398));
-    assert_eq!(field.avatar().object.position, VecFx32::from_tile(700, 0, 398));
+    assert_eq!(field.avatar().object.position, VecFx32::from_tile(700, 2, 398));
     field.tick(held(key::RIGHT), &store);
     assert_eq!(field.last_outcome(), Some(MoveOutcome::Bump(Direction::East)));
     for _ in 0..17 {
         field.tick(held(key::RIGHT), &store);
     }
     assert_eq!(tile(&field), (700, 398));
-    assert_eq!(field.avatar().object.position, VecFx32::from_tile(700, 0, 398));
+    assert_eq!(field.avatar().object.position, VecFx32::from_tile(700, 2, 398));
+}
+
+#[test]
+fn the_player_stands_at_the_bdhc_ground_height() {
+    let Some(store) = open_rom() else {
+        return;
+    };
+    let at = |x: i32, z: i32| VecFx32::from_tile(x, 0, z);
+    // The bedroom's floor plate is at 0 (land 217).
+    let field = bedroom(&store);
+    assert_eq!(field.terrain().height_at(at(6, 6).x, 0, at(6, 6).z), Some(0));
+    assert_eq!(field.avatar().object.position.y, 0);
+    // 1F (land 216): a faintly tilted floor, 140/4096 units at the
+    // stairs, and a raised plate inside the wall behind them; the
+    // height is fetched at creation (sub_0205EFB4 -> sub_0205EF8C).
+    let house = FieldSystem::enter(&store, Location::new(63, -1, 3, 3, Direction::East), 0)
+        .expect("1F loads");
+    let terrain = house.terrain();
+    assert_eq!(terrain.height_at(at(3, 3).x, 0, at(3, 3).z), Some(140));
+    assert_eq!(terrain.height_at(at(2, 3).x, 0, at(2, 3).z), Some(24724));
+    assert_eq!(house.avatar().object.position.y, 140);
+    // New Bark Town (land 0 of cell (21, 12)): the land surface at 16
+    // units under every tile of the walk; the player, its tile y, the
+    // camera target and the billboard anchor all sit on it.
+    let mut town = FieldSystem::enter(&store, Location::new(60, -1, 695, 397, Direction::South), 0)
+        .expect("New Bark Town loads");
+    for (x, z) in [(695, 397), (695, 396), (700, 400), (686, 400), (686, 412), (690, 407)] {
+        let p = at(x, z);
+        assert_eq!(town.terrain().height_at(p.x, 0, p.z), Some(16 * FX32_ONE), "({x}, {z})");
+    }
+    assert_eq!(town.avatar().object.position, VecFx32::from_tile(695, 2, 397));
+    assert_eq!(town.avatar().object.current, [695, 2, 397]);
+    town.tick(Input::default(), &store);
+    let view = town.frame().main.field.as_ref().unwrap();
+    assert_eq!(view.camera_target, [at(695, 397).x, 16 * FX32_ONE, at(695, 397).z]);
+    assert_eq!(view.objects[0].world_pos[1], 16 * FX32_ONE);
 }

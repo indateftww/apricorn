@@ -41,6 +41,7 @@ use super::avatar::{
     PlayerState,
 };
 use super::events::WarpEvent;
+use super::height::{HeightMode, scene_height};
 use super::input::{FieldInput, FieldInputContext};
 use super::map_header::MapHeaders;
 use super::map_object::{
@@ -50,7 +51,7 @@ use super::map_object::{
 use super::model::{Texture, decode_texture};
 use super::ov01::{self, CameraPreset, Ov01, SpriteModelTable};
 use super::terrain::TerrainAttributes;
-use super::FieldScene;
+use super::{FieldScene, LandCell};
 use crate::assets::{AssetStore, AssetsError, narc_member};
 use crate::formats::Btx;
 use crate::frame::{BrightnessMode, FieldFrame, LogicalFrame, MasterBrightness, ObjectView};
@@ -585,16 +586,19 @@ impl BehaviorFlags {
     }
 }
 
-/// The loaded map's terrain attributes as the collision code reads them
-/// (`GetMetatileBehavior` / `sub_020548C0`): a tile whose cell is not
-/// resident answers [`ATTR_NONE`]; surfable water comes from the ROM's
-/// behaviour-flags table.
+/// The loaded map's terrain as the collision and height code read it
+/// (`GetMetatileBehavior` / `sub_020548C0` / `sub_02054940`): a tile
+/// whose cell is not resident answers [`ATTR_NONE`]; surfable water
+/// comes from the ROM's behaviour-flags table; heights come from the
+/// resident cells' BDHC plates.
 #[derive(Debug, Clone, Copy)]
 pub struct SceneTerrain<'a> {
     /// The scene's attribute window.
     pub attrs: &'a TerrainAttributes,
     /// The behaviour flags table.
     pub flags: &'a BehaviorFlags,
+    /// The resident cells, for their height data.
+    pub cells: &'a [LandCell],
 }
 
 impl Collision for SceneTerrain<'_> {
@@ -604,6 +608,11 @@ impl Collision for SceneTerrain<'_> {
 
     fn surfable(&self, x: i32, z: i32) -> bool {
         self.flags.surfable(self.behavior(x, z))
+    }
+
+    /// `sub_02054774`: the plate nearest the current height.
+    fn height_at(&self, x: i32, y: i32, z: i32) -> Option<i32> {
+        scene_height(self.cells, HeightMode::Nearest, x, y, z)
     }
 }
 
@@ -798,7 +807,7 @@ impl FieldSystem {
         let sprite = PlayerSprite::load(store, gender)?;
         let flags = BehaviorFlags::load(store)?;
         let (scene, location) = Self::load_location(store, location, gender)?;
-        let avatar = Self::create_avatar(&location, gender);
+        let avatar = Self::create_avatar(&scene, &flags, &location, gender);
         let camera = scene.camera;
         let mut system = Self {
             scene: Arc::new(scene),
@@ -861,8 +870,18 @@ impl FieldSystem {
     }
 
     /// `PlayerAvatar_CreateWithParams(x, y, direction, state, gender,
-    /// sprite, playerSaveData)` for the new game's save data.
-    fn create_avatar(location: &Location, gender: u8) -> PlayerAvatar {
+    /// sprite, playerSaveData)` for the new game's save data. The
+    /// object is created with `HEIGHT_STALE` (`sub_0205EC90`) and, the
+    /// field overlay being up, its height is fetched at once
+    /// (`sub_0205EFB4` → `sub_0205EF8C`, `src/map_object.c:217,805`):
+    /// the player stands on the land surface the cells' BDHC plates
+    /// give (`MapObject::update_height_from`).
+    fn create_avatar(
+        scene: &FieldScene,
+        flags: &BehaviorFlags,
+        location: &Location,
+        gender: u8,
+    ) -> PlayerAvatar {
         let mut avatar = PlayerAvatar::new(
             location.x,
             location.z,
@@ -872,9 +891,12 @@ impl FieldSystem {
             u32::from(ov01::player_sprite(gender)),
             PlayerSaveData::default(),
         );
-        // No BDHC height solver yet: the player stays at y = 0 and the
-        // height protocol is skipped (docs/field-movement.md).
-        avatar.object.set_flags(flag::IGNORE_HEIGHTS);
+        let terrain = SceneTerrain {
+            attrs: &scene.terrain,
+            flags,
+            cells: &scene.cells,
+        };
+        avatar.object.update_height_from(&terrain);
         avatar
     }
 
@@ -908,6 +930,7 @@ impl FieldSystem {
         SceneTerrain {
             attrs: &self.scene.terrain,
             flags: &self.flags,
+            cells: &self.scene.cells,
         }
     }
 
@@ -1036,6 +1059,7 @@ impl FieldSystem {
                 let terrain = SceneTerrain {
                     attrs: &self.scene.terrain,
                     flags: &self.flags,
+                    cells: &self.scene.cells,
                 };
                 let outcome = self.avatar.move_control(&digest, &terrain);
                 self.last_outcome = Some(outcome);
@@ -1061,6 +1085,7 @@ impl FieldSystem {
             let terrain = SceneTerrain {
                 attrs: &self.scene.terrain,
                 flags: &self.flags,
+                cells: &self.scene.cells,
             };
             self.avatar.object.tick(&terrain)
         };
@@ -1166,7 +1191,7 @@ impl FieldSystem {
         self.camera = scene.camera;
         self.scene = Arc::new(scene);
         let mut location = location;
-        let mut avatar = Self::create_avatar(&location, self.gender);
+        let mut avatar = Self::create_avatar(&self.scene, &self.flags, &location, self.gender);
         if kind == TransitionKind::Stairs {
             let behavior = self.scene.terrain.behavior(location.x, location.z);
             let (dx, facing) = if behavior == BEHAVIOR_WARP_STAIRS_EAST {
@@ -1176,13 +1201,21 @@ impl FieldSystem {
             } else {
                 (0, location.direction)
             };
-            // sub_0205C810: MapObject_SetPositionFromVectorAndDirection
-            // and both move states cleared.
+            // The shifted position vector takes the ground height there
+            // (sub_02054940 on the wall tile; 0 when no plate covers
+            // it), then sub_0205C810:
+            // MapObject_SetPositionFromVectorAndDirection (tile y =
+            // (y >> 3) / FX32_ONE) and both move states cleared.
             let x = location.x + dx;
-            avatar.object.current = [x, 0, location.z];
+            let mut position = VecFx32::from_tile(x, 0, location.z);
+            position.y = self
+                .terrain()
+                .height_at(position.x, avatar.object.position.y, position.z)
+                .unwrap_or(0);
+            avatar.object.current = [x, (position.y >> 3) / FX32_ONE, location.z];
             avatar.object.previous = avatar.object.current;
             avatar.object.initial = avatar.object.current;
-            avatar.object.position = VecFx32::from_tile(x, 0, location.z);
+            avatar.object.position = position;
             avatar.object.set_facing_direction_direct(facing);
             avatar.object.set_next_facing_direction(facing);
             avatar.object.initial_facing = facing;
