@@ -47,8 +47,9 @@ fn pins_verify_against_retail_arm9_image() {
 
     // The pins are exactly the committed differential surface: the 17
     // math pins of Phase 2/3 (12 code + 5 data) plus the 47 save pins
-    // of Phase 4 step 4 (45 size stubs + 2 chunk-table globals).
-    assert_eq!(table.pins().len(), 64);
+    // of Phase 4 step 4 (45 size stubs + 2 chunk-table globals) plus the
+    // map-header table pin of Phase 5 (`sMapHeaders`, docs/field-data.md).
+    assert_eq!(table.pins().len(), 65);
     assert_eq!(
         table
             .pins()
