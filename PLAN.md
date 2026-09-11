@@ -260,13 +260,13 @@ branch with ROM-gated tests, then the orchestrator wires them into
 
 - [ ] Map engine: HGSS's map/BG layers, collision, warp/door transitions,
       camera.
-      - [ ] Field data layer: map headers (ARM9 table, pinned), matrices,
+      - [x] Field data layer: map headers (ARM9 table, pinned), matrices,
             land data (attributes/props/model/BDHC/extra), area data,
             terrain attributes + collision bits, map events, script
             headers, overlay-1 tables (camera presets, sprite→model).
             → `apricorn-core::field::{map_header,matrix,land,area,terrain,
             events,script_header,ov01}`, `docs/field-data.md`
-      - [ ] Field rendering: the 3D field composited as engine A's BG0
+      - [x] Field rendering: the 3D field composited as engine A's BG0
             under the 2D layers/OBJ/windows, camera presets (perspective
             and orthographic, SDK fixed-point angles), prop transforms,
             map-object billboards with the original projection shear.
@@ -274,7 +274,7 @@ branch with ROM-gated tests, then the orchestrator wires them into
       - [ ] Warps/doors and the map-load manager's cell windowing.
 - [ ] Player movement (grid + HGSS's smooth sub-tile animation), running shoes,
       bicycle.
-      - [ ] Movement command machine (113 commands; linear steps at
+      - [x] Movement command machine (113 commands; linear steps at
             0x800/0x1000/0x2000/0x4000/0x8000 per frame, turns, END) and
             `PlayerAvatar_MoveControl`, differential-tested against the
             original ARM9 step functions via arm-runner.
@@ -285,7 +285,7 @@ branch with ROM-gated tests, then the orchestrator wires them into
 - [ ] Scripting/event engine: HGSS's script VM (flags, vars, triggers) —
       reverse from asm where pret is incomplete; differential-test with
       `arm-runner`.
-      - [ ] VM core: 3 contexts, 20-deep stack, u16 opcodes, bank
+      - [x] VM core: 3 contexts, 20-deep stack, u16 opcodes, bank
             mapping, init-script dispatch, typed flags/vars over save
             block 4, host trait; the opcode subset used by the early
             game (std init, bedroom, house, New Bark, Route 29, Elm).
@@ -316,9 +316,12 @@ Test infrastructure landing with this phase (Phase 2's promise):
       The polarity fix and regenerated baseline land with the oracle
       screenshot work below; the boot-latency frame offset (retail
       seeds at VBlank 185) is then the remaining engine-side gap.
-- [ ] Oracle screenshots (`--shots`) and `corpus/new-game`: the real ROM
+- [x] Oracle screenshots (`--shots`) and `corpus/new-game`: the real ROM
       driven from boot to the bedroom, with milestone frames recorded
-      for engine-vs-ROM visual comparison.
+      for engine-vs-ROM visual comparison. The oracle's key-mask polarity
+      is fixed and `corpus/boot-idle` regenerated (a single clock seed at
+      frame 185, the intro's `SetLCRNGSeed(0)` at 186); both cases replay
+      EQUIVALENT. → `corpus/new-game/README.md`, `docs/oracle.md`
 
 **Exit:** free-roam Johto with NPCs, doors, dialogue, and correct day/night —
 validated by replay traces against the oracle.
