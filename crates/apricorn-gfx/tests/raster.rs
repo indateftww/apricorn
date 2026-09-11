@@ -1406,3 +1406,232 @@ fn blend_brightness_only_changes_the_displayed_target_plane() {
     let [main, _] = render(&frame, &store);
     assert_eq!(main.pixel(16, 16), [0, 0, 0, 255]);
 }
+
+// ---------------------------------------------------------------------------
+// The field (3D) plane as engine A's BG0
+// ---------------------------------------------------------------------------
+
+mod field_compositing {
+    use super::*;
+    use apricorn_core::field::{
+        FieldScene,
+        model::{Mesh, Texture, Vertex},
+    };
+    use apricorn_gfx::field::tile_position;
+    use std::sync::Arc;
+
+    /// A synthetic field: one red ground quad, `half` world units to
+    /// each side of the player's tile (0, 0), `alpha` 0–31, and an
+    /// invisible (alpha 0) player texture so the shim's billboard draws
+    /// nothing.
+    fn field(half: i32, alpha: u8) -> Arc<FieldScene> {
+        let centre = tile_position([0, 0]);
+        let h = half * 4096;
+        let corner = |dx: i32, dz: i32| Vertex {
+            position: [centre[0] + dx, 0, centre[2] + dz],
+            uv: [0, 0],
+            color: 0x7FFF,
+        };
+        let (a, b, c, d) = (corner(-h, -h), corner(h, -h), corner(h, h), corner(-h, h));
+        Arc::new(FieldScene {
+            map_id: 0,
+            meshes: vec![Mesh {
+                triangles: vec![[a, b, c], [a, c, d]],
+                texture: Some(Arc::new(Texture {
+                    width: 1,
+                    height: 1,
+                    pixels: vec![[255, 0, 0, 255]],
+                })),
+                texture_flags: 0,
+                alpha,
+            }],
+            player: Texture {
+                width: 1,
+                height: 1,
+                pixels: vec![[0, 0, 0, 0]],
+            },
+            position: [0, 0],
+        })
+    }
+
+    /// The field (BG0, enabled) under an opaque gray BG1 (value 5
+    /// everywhere), both at priority 0 until a test says otherwise.
+    fn scene(store: &mut FixtureStore) -> LogicalFrame {
+        let tiles = store.add_tiles(0, &[5u8; 64]);
+        let screen = store.add_screen(8, 8, &[entry(0, false, false, 0)]);
+        let palette = store.add_palette(true, &gray_palette(16));
+        let mut frame = LogicalFrame {
+            main: engine(
+                &[BgLayer::default(), bg_layer(screen)],
+                &[(0, tiles)],
+                palette,
+            ),
+            ..LogicalFrame::default()
+        };
+        frame.main.field = Some(field(100, 31));
+        frame.main.bgs[0].enabled = true;
+        frame
+    }
+
+    #[test]
+    fn the_field_is_bg0_and_sorts_by_priority() {
+        let mut store = FixtureStore::new();
+        let mut frame = scene(&mut store);
+        // BG1 at priority 0 above the field at priority 1.
+        frame.main.bgs[0].priority = 1;
+        frame.main.bgs[1].priority = 0;
+        let [main, _] = render(&frame, &store);
+        assert_eq!(main.pixel(128, 96), [5, 5, 5, 255], "BG1 covers the field");
+        // The field on top: red where the quad lands, BG1 elsewhere.
+        frame.main.bgs[0].priority = 0;
+        frame.main.bgs[1].priority = 1;
+        let [main, _] = render(&frame, &store);
+        assert_eq!(main.pixel(128, 96), [255, 0, 0, 255], "the field shows");
+        assert_eq!(
+            main.pixel(0, 0),
+            [5, 5, 5, 255],
+            "uncovered 3D pixels are transparent"
+        );
+        // A tie goes to the lower BG index — BG0, the field.
+        frame.main.bgs[1].priority = 0;
+        assert_eq!(render(&frame, &store)[0].pixel(128, 96), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn a_disabled_bg0_or_the_hardware_window_hides_the_field() {
+        let mut store = FixtureStore::new();
+        let mut frame = scene(&mut store);
+        frame.main.bgs[1].enabled = false;
+        frame.main.backdrop = 0x7C00; // blue
+        let [main, _] = render(&frame, &store);
+        assert_eq!(main.pixel(128, 96), [255, 0, 0, 255]);
+        assert_eq!(main.pixel(0, 0), [0, 0, 255, 255], "backdrop where clear");
+        frame.main.bgs[0].enabled = false;
+        assert_eq!(render(&frame, &store)[0].pixel(128, 96), [0, 0, 255, 255]);
+        frame.main.bgs[0].enabled = true;
+        frame.main.bgs[0].hidden_rect = Some((120, 90, 136, 102));
+        let [main, _] = render(&frame, &store);
+        assert_eq!(
+            main.pixel(128, 96),
+            [0, 0, 255, 255],
+            "hidden inside the rect"
+        );
+        assert_eq!(main.pixel(140, 96), [255, 0, 0, 255], "shown outside it");
+    }
+
+    #[test]
+    fn sprites_composite_above_the_field_by_priority_and_win_ties() {
+        let mut store = FixtureStore::new();
+        let mut frame = scene(&mut store);
+        frame.main.bgs[1].enabled = false;
+        frame.main.bgs[0].priority = 1;
+        // The OAM fixture: an 8×8 cell whose pixel value is its column
+        // (0 transparent), OBJ palette bank 1, placed so it lands on
+        // the field around (126..134, 92..100).
+        let tiles = store.add_tiles(0, &(0..64).map(|i| (i % 8) as u8).collect::<Vec<_>>());
+        let obj_palette = store.add_palette(true, &gray_palette(32));
+        let mut sprite = store.add_sprite(tiles, obj_palette);
+        sprite.x = 128;
+        sprite.y = 96;
+        frame.main.sprites.push(sprite);
+        let [main, _] = render(&frame, &store);
+        assert_eq!(main.pixel(127, 93), [17, 17, 17, 255], "OBJ over the field");
+        assert_eq!(
+            main.pixel(126, 93),
+            [255, 0, 0, 255],
+            "OBJ value 0 reveals the field"
+        );
+        frame.main.sprites[0].priority = 1;
+        assert_eq!(
+            render(&frame, &store)[0].pixel(127, 93)[0],
+            17,
+            "OBJ wins the tie"
+        );
+        frame.main.bgs[0].priority = 0;
+        assert_eq!(
+            render(&frame, &store)[0].pixel(127, 93),
+            [255, 0, 0, 255],
+            "a higher-priority field hides the OBJ"
+        );
+    }
+
+    #[test]
+    fn master_brightness_and_fades_apply_to_the_field() {
+        let mut store = FixtureStore::new();
+        let mut frame = scene(&mut store);
+        frame.main.bgs[1].enabled = false;
+        frame.main.brightness = MasterBrightness {
+            mode: BrightnessMode::Down,
+            value: 8,
+        };
+        let [main, _] = render(&frame, &store);
+        let down = |c: u32| (c - (c * 8 >> 4)) as u8;
+        assert_eq!(main.pixel(128, 96), [down(255), 0, 0, 255]);
+        // The blend unit's fade on BG0 as a first target (no second
+        // target below), then the master brightness on top of it:
+        // red 255 stays, the other channels rise to 255 · 8/16 = 127,
+        // then all three halve.
+        frame.main.blend = Blend {
+            plane1: plane::BG0,
+            effect: BlendEffect::BrightnessUp,
+            evy: 8,
+            ..Blend::default()
+        };
+        let [main, _] = render(&frame, &store);
+        let up: u32 = 255 * 8 >> 4;
+        assert_eq!(main.pixel(128, 96), [down(255), down(up), down(up), 255]);
+    }
+
+    #[test]
+    fn translucent_field_pixels_blend_with_the_second_target_by_their_alpha() {
+        let mut store = FixtureStore::new();
+        let mut frame = scene(&mut store);
+        frame.main.field = Some(field(100, 15));
+        frame.main.bgs[0].priority = 0;
+        frame.main.bgs[1].priority = 1;
+        // No second target: the pixel shows as is, whatever the mode.
+        let [main, _] = render(&frame, &store);
+        assert_eq!(main.pixel(128, 96), [255, 0, 0, 255]);
+        // BG1 as a second target: ColorBlend5 with eva = 16, evb = 16
+        // and the + 0x10 rounding term, regardless of the effect mode
+        // or first-target mask. The blue channel pins the rounding:
+        // (0 · 16 + 5 · 16 + 16) >> 5 = 3, where an unrounded shift
+        // would give 2.
+        frame.main.blend = Blend {
+            plane2: plane::BG1,
+            ..Blend::default()
+        };
+        let [main, _] = render(&frame, &store);
+        let mix = |a: u32, b: u32| ((a * 16 + b * 16 + 0x10) >> 5) as u8;
+        assert_eq!(mix(0, 5), 3);
+        assert_eq!(
+            main.pixel(128, 96),
+            [mix(255, 5), mix(0, 5), mix(0, 5), 255]
+        );
+        // An opaque field pixel over a second target is unchanged even
+        // under an alpha effect with EVA/EBV set — the 3D plane never
+        // uses the register weights.
+        frame.main.field = Some(field(100, 31));
+        frame.main.blend = Blend {
+            plane1: plane::BG0,
+            effect: BlendEffect::Alpha,
+            plane2: plane::BG1,
+            eva: 8,
+            ebv: 8,
+            evy: 0,
+        };
+        assert_eq!(render(&frame, &store)[0].pixel(128, 96), [255, 0, 0, 255]);
+        // The backdrop completes the search too.
+        frame.main.field = Some(field(100, 15));
+        frame.main.bgs[1].enabled = false;
+        frame.main.backdrop = 0x7C00; // blue
+        frame.main.blend = Blend {
+            plane2: plane::BD,
+            ..Blend::default()
+        };
+        assert_eq!(
+            render(&frame, &store)[0].pixel(128, 96),
+            [mix(255, 0), 0, mix(0, 255), 255]
+        );
+    }
+}
