@@ -50,7 +50,7 @@ fn pins_verify_against_retail_arm9_image() {
     // Phase 4 step 4 (45 size stubs + 2 chunk-table globals), the
     // map-header table pin and the 26 field-movement pins (25 code +
     // gMovementCmdTable) of Phase 5.
-    assert_eq!(table.pins().len(), 91);
+    assert_eq!(table.pins().len(), 103);
     assert_eq!(
         table
             .pins()

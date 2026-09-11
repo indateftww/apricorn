@@ -18,6 +18,7 @@
 pub mod area;
 pub mod events;
 pub mod land;
+pub mod lighting;
 pub mod map_header;
 pub mod matrix;
 pub mod avatar;
@@ -27,6 +28,7 @@ pub mod model;
 pub mod ov01;
 pub mod script_header;
 pub mod terrain;
+pub mod time_state;
 
 use std::collections::HashMap;
 

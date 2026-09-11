@@ -318,9 +318,14 @@ sLCRNG_State\tdata\t0x021D15A8\t4\t9069ca78e7450a285173431b3e52c5c25299e473\t.bs
         let table = PinTable::arm9();
         // 12 math_util/SDK code pins + 5 math data pins, the save
         // chunk-table pins (45 code + 2 data) of Phase 4 step 4, the
-        // field data table pin (sMapHeaders) and the field-movement
-        // pins (25 code + gMovementCmdTable) of Phase 5.
-        assert_eq!(table.pins().len(), 91, "17 math + 47 save + 1 field + 26 movement pins");
+        // field data table pin (sMapHeaders), the field-movement
+        // pins (25 code + gMovementCmdTable) and the day/night pins
+        // (9 code + 3 data) of Phase 5.
+        assert_eq!(
+            table.pins().len(),
+            103,
+            "17 math + 47 save + 1 field + 26 movement + 12 day/night pins"
+        );
         // The Phase 2 differential targets are all pinned.
         for name in [
             "SetLCRNGSeed",
