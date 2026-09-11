@@ -258,21 +258,30 @@ Parallel workstreams (2026-09-11 →): each lands as its own reviewed
 branch with ROM-gated tests, then the orchestrator wires them into
 `app::game`. Sub-items are checked when merged, not when started.
 
-**Status 2026-09-11 (midday):** the foundations are merged and green
-(data layer, 3D field rendering, movement machine, script VM core, start
-menu, day/night model, engine runner, oracle screenshots). The bedroom is
-still a frozen frame in `app::game`: the **field system integration** —
-the per-frame loop that moves the player against the terrain, follows
-with the camera, animates the map-object billboard and runs the
-stairs/door warps (bedroom ↔ house 1F ↔ New Bark Town) — is in progress
-on its own branch (`field::system`, `docs/field-system.md`) and is the
-next objective to finish before stopping to assess. After it: NPC objects
-and the script host (dialogue boxes, init scripts, mom's cutscene), the
-start-menu/day-night hookups, then the user's regression test of Phase 5.
-The text-box "defects" seen in engine screenshots (page-wait boxes, grey
-right column) were measured against retail frames and are retail
-behavior; they are pinned by tests now (`docs/game-flow.md`). Phase 6.1
-(Pokémon data) and Phase 7 (audio) have partial branches parked unmerged.
+**Status 2026-09-11 (afternoon) — checkpoint for the user's regression
+test.** Merged and green (all suites, ROM-gated ones included): the field
+data layer, 3D field rendering, the movement machine, the script VM core,
+the start menu, the day/night model, the engine runner, the oracle
+screenshots, and now the **live field system**: the new-game flow lands
+in a walkable bedroom, the stairs warp to the house's ground floor, the
+door warps to New Bark Town, the player stands on the BDHC ground height
+and the camera follows. Visual checks against retail frames: bedroom and
+house 1F match pixel-for-pixel on the player; New Bark's framing matches
+after the height fix. Not yet in this checkpoint: NPCs (Mom's room is
+empty, no scripted scene), dialogue/script host, the bag/party menus and
+the touch bottom screen (black), lighting applied to the renderer,
+bicycle/ledges/surf, the windmill prop's blade layer (decodes as a
+plane), and any map beyond New Bark Town's neighbours. The text-box
+"defects" seen in engine screenshots were measured against retail and
+are retail behavior (pinned by tests). Phase 6.1 (Pokémon data) and
+Phase 7 (audio) have partial branches parked unmerged.
+
+How to regression test this checkpoint (from this branch):
+`cargo run -p apricorn-desktop -- --rom hg_usa.nds` — play through the
+new game, then walk (arrows) around the bedroom, down the stairs, out
+the front door and around New Bark Town. Headless equivalents:
+`apricorn-run --rom hg_usa.nds --input scripts/engine-walk.apin --png 3010,3153,3290 --out out/walk`
+and the retail ground truth `scripts/shots.ps1 corpus/new-game "4816"`.
 
 - [ ] Map engine: HGSS's map/BG layers, collision, warp/door transitions,
       camera.
@@ -287,11 +296,19 @@ behavior; they are pinned by tests now (`docs/game-flow.md`). Phase 6.1
             and orthographic, SDK fixed-point angles), prop transforms,
             map-object billboards with the original projection shear.
             → `apricorn-gfx::field`, `docs/gfx.md`
-      - [ ] Field system integration (in progress): the live per-frame
-            field in `app::game`, warps/doors between maps, the camera
-            follow, the animated player billboard, and the 3 × 3 cell
-            window of `FieldScene::load`. → `field::system`,
-            `docs/field-system.md`
+      - [x] Field system integration: the live per-frame field in
+            `app::game` (`GameState::Field`), stairs/door warps with the
+            oracle-measured transition schedule, the camera follow, the
+            animated player billboard from the hero's NSBTX, the BDHC
+            plate-height solver (`field::height`, port of
+            `ov01_021FAE50`), the 3 × 3 cell window, the land-data
+            section-order fix (extra section precedes the attributes)
+            and the behaviour-flags table for surfable water.
+            → `field::system`, `docs/field-system.md`,
+            `tests/field_system_hg.rs` (core + gfx goldens).
+      - [ ] Remaining warp kinds (escalators, ladders, warp panels,
+            dynamic anchors), the elevation collision rule, the
+            location-name popup.
 - [ ] Player movement (grid + HGSS's smooth sub-tile animation), running shoes,
       bicycle.
       - [x] Movement command machine (113 commands; linear steps at
