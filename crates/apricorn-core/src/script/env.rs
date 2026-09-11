@@ -64,8 +64,6 @@ pub struct ScriptEnvironment {
     /// create it, `CloseMsg`/`HoldMsg` remove it); signposts never
     /// touch it.
     window_open: bool,
-    /// The variable the scripted list menu (`MenuInit`) writes to.
-    list_menu_var: Option<u16>,
     /// `msgfmt` — `MessageFormat_New_Custom(8, 64)`.
     msgfmt: MessageFormat,
     /// `stringBuffer0` — the expanded text of the last message.
@@ -99,7 +97,6 @@ impl ScriptEnvironment {
             std_wait_mask: 0,
             textbox_open: false,
             window_open: false,
-            list_menu_var: None,
             msgfmt: MessageFormat::new(8),
             string_buffer0: GameString::new(),
             string_buffer1: GameString::new(),
@@ -373,14 +370,6 @@ impl ScriptEnvironment {
 
     pub(crate) fn set_window_open(&mut self, open: bool) {
         self.window_open = open;
-    }
-
-    pub(crate) fn list_menu_var(&self) -> Option<u16> {
-        self.list_menu_var
-    }
-
-    pub(crate) fn set_list_menu_var(&mut self, var: Option<u16>) {
-        self.list_menu_var = var;
     }
 
     pub(crate) fn std_wait_mask(&self) -> u8 {

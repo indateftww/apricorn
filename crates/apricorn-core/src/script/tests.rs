@@ -1314,6 +1314,10 @@ fn list_menu_result_goes_to_the_menu_init_variable() {
     }));
     h.poll_values.insert(WaitFor::MenuExec, 1);
     let mut e = env();
+    // sub_02041770 ends with `ctx->data[0] = var`: after MenuInit's
+    // frame the register names the result variable for MenuExec.
+    assert_eq!(e.run_frame(&mut h).unwrap(), FrameStatus::Running);
+    assert_eq!(e.context(0).unwrap().registers()[0], u32::from(RESULT));
     run(&mut e, &mut h, 20);
     assert_eq!(e.special_var(0xC), Some(1));
     let actions = h.actions();
@@ -1337,6 +1341,35 @@ fn list_menu_result_goes_to_the_menu_init_variable() {
     };
     assert_eq!(text.units(), &[A, A + 1, A + 2]);
     assert_eq!(actions[3], &FieldAction::MenuExec);
+}
+
+#[test]
+fn list_menu_result_goes_to_a_saved_variable_too() {
+    let mut h = host(one(|a| {
+        a.op(Op::MenuInit).b(1).b(1).b(0).b(1).h(V1);
+        a.op(Op::MenuItemAdd).h(1).h(255).h(0);
+        a.op(Op::MenuExec);
+        a.op(Op::End);
+    }));
+    h.poll_values.insert(WaitFor::MenuExec, 7);
+    let mut e = env();
+    run(&mut e, &mut h, 20);
+    assert_eq!(var(&mut h, V1), 7);
+    assert_eq!(e.special_var(0xC), Some(0), "VAR_SPECIAL_RESULT untouched");
+}
+
+#[test]
+fn menu_exec_without_a_menu_init_variable_is_an_error() {
+    // ScrCmd_MenuExec resolves `GetVarPointer(data[0])`; a register
+    // no MenuInit filled (0) is no variable — NULL in the C.
+    let mut h = host(one(|a| {
+        a.op(Op::MenuExec);
+        a.op(Op::End);
+    }));
+    let mut e = env();
+    let err = e.run_frame(&mut h).unwrap_err();
+    assert!(matches!(err, ScriptError::BadVar { var: 0, .. }), "{err:?}");
+    assert!(h.actions().is_empty(), "the menu never ran");
 }
 
 #[test]

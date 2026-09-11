@@ -1301,10 +1301,9 @@ pub(crate) fn execute(
             c.native(NativeWait::MenuChoice)
         }
         Opcode::MenuInit => {
-            // sub_02041770: the halfword names the variable the menu
-            // gets a pointer to; `data[0]` is *not* written (the C's
-            // MenuExec reads whatever an earlier command left there —
-            // nothing, in the retail Mom script).
+            // sub_02041770 (scrcmd_c.c:992): the halfword names the
+            // variable the menu gets a pointer to, and `ctx->data[0] =
+            // var` records it for MenuExec's `GetVarPointer(data[0])`.
             let x = c.u8()?;
             let y = c.u8()?;
             let cursor = c.u8()?;
@@ -1317,7 +1316,7 @@ pub(crate) fn execute(
                 cancellable,
                 result_var: ret,
             });
-            c.env.set_list_menu_var(Some(ret));
+            c.ctx.set_data(0, u32::from(ret));
             Yield
         }
         Opcode::MenuItemAdd => {
@@ -1333,6 +1332,13 @@ pub(crate) fn execute(
             Continue
         }
         Opcode::MenuExec => {
+            // ScrCmd_MenuExec hands `GetVarPointer(data[0])` to the
+            // touch-menu task; a `data[0]` that is not a variable is a
+            // NULL pointer there, an error here.
+            let var = c.ctx.data(0) as u16;
+            if !(is_saved_var(var) || is_special_var(var)) {
+                return Err(c.bad_var(var));
+            }
             c.action(FieldAction::MenuExec);
             c.native(NativeWait::MenuExec)
         }
@@ -1473,17 +1479,11 @@ pub(crate) fn run_native(
         },
         NativeWait::MenuExec => match c.host.poll(WaitFor::MenuExec) {
             Some(result) => {
-                // The choice lands in the variable MenuInit handed the
-                // menu; the C also hands `GetVarPointer(data[0])` to the
-                // touch-menu task, so a resolvable `data[0]` gets it too.
-                if let Some(var) = c.env.list_menu_var() {
-                    c.write(var, result)?;
-                }
-                let stale = c.ctx.data(0) as u16;
-                if is_saved_var(stale) || is_special_var(stale) {
-                    c.write(stale, result)?;
-                }
-                c.env.set_list_menu_var(None);
+                // sub_020478D0: `*GetVarPointer(data[0])` — the variable
+                // MenuInit named — stops reading 0xEEEE once the menu
+                // task has written the choice into it.
+                let var = c.ctx.data(0) as u16;
+                c.write(var, result)?;
                 true
             }
             None => false,

@@ -165,11 +165,13 @@ exactly where the C returns `TRUE`. Ported quirks worth knowing:
 * `LotoIDSet` draws `LCRandom` twice and, as retail
   `Save_VarsFlags_SetLotoId` does without `BUGFIX_LOTO_NUMBER_HI`,
   writes both halves to `VAR_LOTO_NUMBER_LO`.
-* `MenuInit` does not write `data[0]`; retail `MenuExec` reads it as
-  the result variable anyway (stale — zero in the Mom savings script),
-  while the menu itself holds `MenuInit`'s variable pointer. The port
-  writes the choice to `MenuInit`'s variable, and to `data[0]`'s too
-  when that resolves.
+* `MenuInit` (`sub_02041770`) hands the menu a pointer to the variable
+  its last operand names *and* records that id in `data[0]`; `MenuExec`
+  resolves `GetVarPointer(data[0])` again for the touch-menu task and
+  its native wait (`sub_020478D0`) returns once that variable stops
+  reading `0xEEEE`. The port keeps the same register protocol: the
+  choice lands in `data[0]`'s variable, and a `MenuExec` whose `data[0]`
+  is not a variable (a NULL pointer in the C) is a `BadVar` error.
 * `NicknameInput 255` with no Bug Contest catch returns `TRUE` before
   reading its result operand, as the C does.
 * `ApplyMovement` on an object the host does not have is not an error
