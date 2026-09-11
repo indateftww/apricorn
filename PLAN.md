@@ -306,6 +306,43 @@ Picking this up later:
   `docs/day-night.md`, `docs/engine-runner.md`, `docs/oracle.md`,
   `corpus/new-game/README.md` (retail frame-by-frame milestones).
 
+**What is left for Phase 5** (consolidated, in the order to do it):
+
+1. **NPC objects + script host** — `MapObjectManager` from each map's
+   `ObjectEvent`s (sprites via the ov01 sprite→model table, walk cycles
+   like the player's), the NPC movement types (look-around/wander draw
+   from the LCRNG, so port them from the asm with arm-runner checks),
+   A-button interaction radius and facing, the field `ScriptHost`
+   (dialogue box on the top LCD via `TextPrinter`, yes/no, `ApplyMovement`/
+   `WaitMovement`, `Warp`, fades, player lock), init scripts on map load
+   (`ON_TRANSITION`/`ON_RESUME`/`ON_LOAD`/frame table), BG-event signs and
+   coordinate triggers. Milestone: Mom's scripted scene in the house runs
+   and every sign in New Bark Town talks.
+2. **Field hookups** — the start menu opened from the field (X/START),
+   the touch bottom screen (today black), the area-light template applied
+   to the 3D renderer per time of day, the location-name popup on map
+   entry, day/night music ids exposed for Phase 7.
+3. **Map coverage** — streaming beyond the 3 × 3 cell window as the
+   player moves, the remaining warp kinds (escalators, ladders, warp
+   panels, `0x100` dynamic anchors), the elevation collision rule
+   (`sub_02054954`), Route 29 → Cherrygrove → Route 30 walkable with
+   their events.
+4. **Movement slices** — running shoes/B-run, ledges/jumps, bicycle,
+   surf (behaviour flags and step machine already carry the seams).
+5. **Menus** — bag and party screens with their touch versions
+   (Phase 6.1's party/bag data views are on the parked branch), the
+   unselected-icon OAM dimming in the start menu.
+6. **Known fidelity gaps** — the windmill prop's blade layer (bm_field
+   member 28) decodes as a flat plane; the door-out transition schedule
+   is assumed from the stairs measurement; the engine seeds at
+   construction while retail seeds at VBlank 185 (Phase 8 parity item).
+7. **Phase 5 exit** — an oracle replay of a New Bark/Route 29 walk with
+   NPC RNG draws compared by trace, then the user's regression test and
+   acceptance.
+
+Phases 6–9 keep their own checklists below; Phase 6.1 and Phase 7's
+first slice have parked partial branches.
+
 - [ ] Map engine: HGSS's map/BG layers, collision, warp/door transitions,
       camera.
       - [x] Field data layer: map headers (ARM9 table, pinned), matrices,
