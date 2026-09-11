@@ -6,7 +6,34 @@ use apricorn_core::assets::AssetStore;
 use apricorn_core::input::{Input, Keys, key};
 use apricorn_core::rtc::RtcDateTime;
 use apricorn_gfx::render;
+use sha1::{Digest, Sha1};
 use std::sync::Mutex;
+
+/// The down arrow's three poses (index 3 repeats index 1), as the
+/// SHA-1 of the 16×16 RGBA block at tiles `(left+width+1,
+/// top+height-2)` of Oak's dialog. Pinned 2026-09-11 after a
+/// pixel-for-pixel match (modulo the oracle's 5→8-bit color
+/// expansion) against the retail ROM's held paragraph wait; see
+/// `docs/game-flow.md`, "Rendering fixes".
+const ARROW_POSE_GOLDEN: [&str; 4] = [
+    "32e395d1da58d08dc9e474e7a3b9cef249fe2ba1",
+    "d84ece097b4458075b65edc3fbd66c55ba0726b7",
+    "99fa7e7383096868b5328ef4fa393d4cc0bd1e12",
+    "d84ece097b4458075b65edc3fbd66c55ba0726b7",
+];
+
+/// The top LCD at frame 2071 of the gender-question tick schedule
+/// below — Oak's "…are you a girl?" dialog fully printed with the
+/// `{YESNO 0}` screen-focus icon (the two stacked screens, bottom
+/// highlighted) in its reserved column, no arrow. Pinned after a
+/// pixel comparison with the retail ROM's frame 3580 (the corpus
+/// `new-game` case), the same as `apricorn-run`'s frame 2071 of
+/// `scripts/engine-new-game.apin`.
+const GENDER_QUESTION_TOP_GOLDEN: &str = "ab7eac6811acc36ca66a8b54f6af49ab8b09a471";
+
+fn sha1_hex(screen: &apricorn_gfx::ScreenBuffer) -> String {
+    format!("{:x}", Sha1::digest(screen.as_rgba().as_flattened()))
+}
 
 fn save_screens(name: &str, screens: &[apricorn_gfx::ScreenBuffer; 2]) {
     if let Some(out) = std::env::var_os("APRICORN_RENDER_OUT") {
@@ -55,6 +82,16 @@ fn gender_highlight_moves_pulses_and_survives_confirmation() {
                 },
             );
         }
+        // The printed question with its screen-focus icon (the
+        // retail-verified golden, both genders alike).
+        let question = render(oak.frame(), &*store.lock().unwrap());
+        // Oak's frame selects MAIN for the top LCD (`render`'s [0]).
+        assert_eq!(
+            sha1_hex(&question[0]),
+            GENDER_QUESTION_TOP_GOLDEN,
+            "frame 2071 top LCD"
+        );
+        save_screens("gender-question.png", &question);
         // The tutorial left pad mode active. Check both directions.
         for (index, keys, selected) in [
             (2072, key::LEFT, None),
@@ -164,6 +201,8 @@ fn paragraph_pause_draws_all_arrow_frames_without_holes() {
     let store = Mutex::new(AssetStore::open(path).expect("pinned retail ROM"));
     let mut oak = OakSpeech::load(&store, RtcDateTime::new(2010, 3, 14, 0, 12, 0, 0)).unwrap();
     let mut seen = [false; 4];
+    let mut first_seen = [None; 4];
+    let mut pose_hashes: [String; 4] = Default::default();
     let mut arrow_rect = None;
     let mut restored_border = Vec::new();
     for index in 288..4000 {
@@ -191,6 +230,7 @@ fn paragraph_pause_draws_all_arrow_frames_without_holes() {
         if seen[usize::from(arrow.index)] {
             continue;
         }
+        first_seen[usize::from(arrow.index)] = Some(index);
         let border = window.frame.unwrap();
         assert_eq!(
             arrow.base_tile, border.base_tile,
@@ -231,6 +271,16 @@ fn paragraph_pause_draws_all_arrow_frames_without_holes() {
             (1..96).contains(&ink),
             "arrow glyph over the intact border: {ink} changed pixels"
         );
+        // The pose itself: the 2×2-tile block's SHA-1, pinned after
+        // a pixel comparison with the retail ROM's held paragraph
+        // wait (the oracle's frames 2124–2200 with the A pulses
+        // removed; `docs/game-flow.md`, "Rendering fixes"). Index 3
+        // re-draws index 1's tiles (`sDownArrowTileOffsets`).
+        let block: Vec<u8> = (y..y + 16)
+            .flat_map(|py| (x..x + 16).map(move |px| (px, py)))
+            .flat_map(|(px, py)| actual[0].pixel(px, py))
+            .collect();
+        pose_hashes[usize::from(arrow.index)] = format!("{:x}", Sha1::digest(&block));
         if let Some(out) = std::env::var_os("APRICORN_RENDER_OUT") {
             let out = std::path::PathBuf::from(out);
             std::fs::create_dir_all(&out).unwrap();
@@ -255,6 +305,26 @@ fn paragraph_pause_draws_all_arrow_frames_without_holes() {
     assert!(
         seen.iter().all(|&seen| seen),
         "the script must reach and hold a paragraph pause"
+    );
+    // The cycle's timing: the first wait frame draws pose 0
+    // (`downArrowDelay` starts at 0), then `downArrowDelay = 8`
+    // holds each pose for nine frames — the retail sequence is
+    // 0×9, 1×9, 2×9, 1×9, 0… (oracle frames 2124–2200 of the held
+    // wait: pose changes at 2133, 2142, 2151, 2160).
+    assert_eq!(
+        pose_hashes.each_ref().map(String::as_str),
+        ARROW_POSE_GOLDEN,
+        "arrow pose block hashes"
+    );
+    let first_seen = first_seen.map(|frame| frame.expect("every pose was seen"));
+    assert_eq!(
+        [
+            first_seen[1] - first_seen[0],
+            first_seen[2] - first_seen[1],
+            first_seen[3] - first_seen[2],
+        ],
+        [9, 9, 9],
+        "nine frames per pose: {first_seen:?}"
     );
     oak.tick(
         apricorn_core::Frame { index: 4000 },

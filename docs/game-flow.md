@@ -75,6 +75,37 @@ explicitly black, and its BG0 draws only the prompt near the bottom.
 Local review renders cover all three pages and a filled name after a
 complete page cycle; the user confirmed the corrected rendering.
 
+Two suspected text-box defects were checked against the retail ROM on
+the oracle (2026-09-11) and turned out to be retail behavior, pixel for
+pixel modulo melonDS's 5→8-bit color expansion:
+
+- The "two stacked rounded boxes" at the right end of Oak's gender and
+  name dialogs and of the naming prompt are the `{YESNO 0}` screen-focus
+  icon (`RenderScreenFocusIndicatorTile`, `text.c:296`: frame 0 of
+  `graphic_font` member 6 blitted at `(width-3)·8`), which the retail ROM
+  draws at the same place (oracle frames 3576–3640, 3876, 4110). They are
+  not the page-wait arrow. The arrow (`TextPrinter_DrawDownArrow`,
+  `render_text.c:395`) is a light-grey triangle over the frame's `+10/+11`
+  border columns, and the engine's three poses match the retail ROM's
+  held paragraph wait (a scratch oracle case with the A pulses removed,
+  frames 2124–2200) tile for tile, nine frames per pose in the
+  `{0, 1, 2, 1}` cycle. `scripts/engine-new-game.apin` pulses A on
+  alternate ticks, so every engine paragraph wait is drawn and cleared
+  within one tick and the arrow never reaches its PNGs — a script
+  artifact, not a renderer defect; the corpus retail script pulses with
+  period 8.
+- The 16-pixel dark band before the box's right border is the dialogue
+  frame's own art: `sub_0200E6B4` (`render_window.s`) writes three border
+  columns right of the interior (`+3/+4/+5`, `+9/+10/+11`, `+15/+16/+17`)
+  and two left of it; the interior fill spans exactly `width` tiles. The
+  retail frames 1959/2081/3580/3638/3876 show the same band.
+
+`gfx/tests/raster.rs::dialogue_fill_border_arrow_and_focus_extents_follow_pret`
+pins that geometry ROM-free; `gfx/tests/oak_hg.rs` pins the three arrow
+poses' block hashes and their nine-frame timing plus the gender question's
+top LCD, and `gfx/tests/naming_hg.rs` the prompt's top LCD, all pinned
+after the retail comparison.
+
 ## Validation and remaining parity work
 
 `crates/apricorn-core/tests/naming_hg.rs` checks layout loading, cursor
