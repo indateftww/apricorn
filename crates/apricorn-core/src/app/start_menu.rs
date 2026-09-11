@@ -425,7 +425,12 @@ enum State {
 
 /// `ov27_0225B404`'s direction order (`:2529-2551`): UP, DOWN, LEFT,
 /// RIGHT — the first held new key wins in that order.
-const DIRECTIONS: [(u16, usize); 4] = [(key::UP, 0), (key::DOWN, 1), (key::LEFT, 2), (key::RIGHT, 3)];
+const DIRECTIONS: [(u16, usize); 4] = [
+    (key::UP, 0),
+    (key::DOWN, 1),
+    (key::LEFT, 2),
+    (key::RIGHT, 3),
+];
 
 /// `ov27_0225D0B4` (`overlay_27.s:6073-6079`) — the d-pad walk: per
 /// grid slot, per direction, three candidate slots tried in order
@@ -759,8 +764,14 @@ impl StartMenu {
         let font0_asset = store.load_font(font_narc::NARC, font_narc::FONT0)?;
         let font4_asset = store.load_font(font_narc::NARC, font_narc::FONT4)?;
         let focus_asset = store.load_tiles(font_narc::NARC, font_narc::FOCUS_INDICATOR)?;
-        let font0 = store.font(font0_asset).expect("the just-loaded font").clone();
-        let font4 = store.font(font4_asset).expect("the just-loaded font").clone();
+        let font0 = store
+            .font(font0_asset)
+            .expect("the just-loaded font")
+            .clone();
+        let font4 = store
+            .font(font4_asset)
+            .expect("the just-loaded font")
+            .clone();
         // Task_StartMenu_DrawCursor (:465-467) + StartMenu_CreateCursor (:668-671).
         let top_char = store.load_tiles(narc::NARC, narc::TOP_BAR_CHAR)?;
         let top_screen = store.load_screen(narc::NARC, narc::TOP_BAR_SCREEN)?;
@@ -800,7 +811,11 @@ impl StartMenu {
                 }
                 let msg = usize::from(RESOURCE_LABELS[usize::from(resource)] & 0x7FFF);
                 let units = text.message(msg).expect("bank 196 carries the label");
-                Some(format.expand_placeholders(units).expect("the label expands"))
+                Some(
+                    format
+                        .expand_placeholders(units)
+                        .expect("the label expands"),
+                )
             });
             (header, labels)
         };
@@ -948,6 +963,13 @@ impl StartMenu {
         std::array::from_fn(|i| (self.slots[i].resource, self.slots[i].visible))
     }
 
+    /// `StartMenuTaskData.unk_350` — the union-room variant, whose
+    /// gear slot carries the LOG (`START_MENU_ACTION_12`).
+    #[must_use]
+    pub fn is_union_room(&self) -> bool {
+        self.unk_350
+    }
+
     /// The layout row overlay 27 picked (`ov27_0225BD50`): 0 normal,
     /// 1 safari, 2 bug contest, 3 pal park, 4 union room, 5 colosseum,
     /// 6 the battle tower partner room.
@@ -991,7 +1013,12 @@ impl StartMenu {
     /// overlay 27's sys task (`ov27_0225A320`, `:420` — its case-2
     /// touch and d-pad handling), then the sprite animation step and
     /// the fade's post-vblank update. Returns what the tick produced.
-    pub fn tick(&mut self, _frame: crate::Frame, input: Input, host: &dyn StartMenuHost) -> StartMenuEvent {
+    pub fn tick(
+        &mut self,
+        _frame: crate::Frame,
+        input: Input,
+        host: &dyn StartMenuHost,
+    ) -> StartMenuEvent {
         let new_keys = input.keys.pressed(self.prev_keys);
         self.prev_keys = input.keys;
         let touch_new = input.touch.is_some() && !self.prev_touch;
@@ -1182,7 +1209,9 @@ impl StartMenu {
     /// pass, then — when it did not consume the frame —
     /// `ov27_0225B404`'s d-pad walk.
     fn sub_screen_input(&mut self, input: Input, new_keys: Keys, touch_new: bool) {
-        if !self.b4d8(input, new_keys, touch_new) {
+        // `_0225A85C`: `bl ov27_0225B4D8; cmp r0, #0; beq _0225A86A;
+        // bl ov27_0225B404` — the walk runs on a nonzero return.
+        if self.b4d8(input, new_keys, touch_new) {
             self.b404(new_keys);
         }
     }
@@ -1671,19 +1700,25 @@ pub fn layout_row(host: &dyn StartMenuHost) -> usize {
 /// `TouchscreenHitbox_FindRectAtTouchNew(ov27_0225CF68)` — the first
 /// hitbox containing the stylus, if any.
 fn hitbox_at(touch: Touch) -> Option<usize> {
-    HITBOXES
-        .iter()
-        .position(|&(top, bottom, left, right)| {
-            touch.x >= u16::from(left)
-                && touch.x < u16::from(right)
-                && touch.y >= u16::from(top)
-                && touch.y < u16::from(bottom)
-        })
+    HITBOXES.iter().position(|&(top, bottom, left, right)| {
+        touch.x >= u16::from(left)
+            && touch.x < u16::from(right)
+            && touch.y >= u16::from(top)
+            && touch.y < u16::from(bottom)
+    })
 }
 
 /// `AddWindowParameterized` — one window from its template
 /// parameters, filled with 0 (`FillWindowPixelBuffer(window, 0)`).
-fn add_window(bg: u8, left: u8, top: u8, width: u8, height: u8, palette: u8, base_tile: u16) -> Window {
+fn add_window(
+    bg: u8,
+    left: u8,
+    top: u8,
+    width: u8,
+    height: u8,
+    palette: u8,
+    base_tile: u16,
+) -> Window {
     Window {
         bg,
         left,
@@ -1763,8 +1798,14 @@ mod tests {
         assert_eq!(StartMenuAction::Pokegear.label_msg(), 14);
         assert_eq!(StartMenuAction::Action12.label_msg(), 14);
         // sActionToIconIndex: 0, 1, 2, 4, 5, 6, 100×5, 3.
-        assert_eq!(StartMenuAction::TrainerCard.icon(), Some(StartMenuIcon::TrainerCard));
-        assert_eq!(StartMenuAction::Pokegear.icon(), Some(StartMenuIcon::Pokegear));
+        assert_eq!(
+            StartMenuAction::TrainerCard.icon(),
+            Some(StartMenuIcon::TrainerCard)
+        );
+        assert_eq!(
+            StartMenuAction::Pokegear.icon(),
+            Some(StartMenuIcon::Pokegear)
+        );
         assert_eq!(StartMenuAction::RunningShoes.icon(), None);
         assert_eq!(StartMenuAction::Action9.icon(), None);
     }
@@ -1869,7 +1910,11 @@ mod tests {
         // The layout rows and the C's insertion order agree slot for
         // slot in every mode (the grid slot is the display slot).
         assert_eq!(LAYOUT_SLOTS[1][0], 7, "safari: RETIRE leads");
-        assert_eq!(LAYOUT_SLOTS[6][..3], [1, 4, 6], "tower: POKéMON, card, options");
+        assert_eq!(
+            LAYOUT_SLOTS[6][..3],
+            [1, 4, 6],
+            "tower: POKéMON, card, options"
+        );
     }
 
     #[test]
