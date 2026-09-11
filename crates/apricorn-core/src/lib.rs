@@ -25,6 +25,7 @@ pub mod nds;
 pub mod rng;
 pub mod rtc;
 pub mod save;
+pub mod script;
 pub mod text;
 
 /// Semantic version of the engine's state-machine / trace format.
