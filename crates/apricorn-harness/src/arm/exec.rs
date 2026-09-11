@@ -847,7 +847,16 @@ impl Cpu {
                 } else {
                     self.regs[rn as usize]
                 };
-                self.regs[d] = self.regs[d].wrapping_add(b);
+                if d == 15 {
+                    // `add pc, Rm` — the compiler's Thumb switch idiom
+                    // (`add r0, pc; ldrh r0, [r0, #n]; add pc, r0`):
+                    // the pc operand is the read-ahead value (pc + 4),
+                    // not the already-advanced r15, and the result
+                    // stays in Thumb with bit 0 cleared (no interwork).
+                    self.regs[15] = self.reg_operand(15, pc).wrapping_add(b) & !1;
+                } else {
+                    self.regs[d] = self.regs[d].wrapping_add(b);
+                }
                 Ok(())
             }
             0x45 => {
