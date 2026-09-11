@@ -148,6 +148,9 @@ pub struct BgLayer {
     /// Draw priority 0–3 (`BGxCNT` bits 0–1): lower draws on top;
     /// ties go to the lower-numbered BG.
     pub priority: u8,
+    /// Screen-space rectangle where the hardware window hides this BG,
+    /// `(left, top, right, bottom)` with exclusive right/bottom edges.
+    pub hidden_rect: Option<(u16, u16, u16, u16)>,
 }
 
 impl Default for BgLayer {
@@ -161,6 +164,7 @@ impl Default for BgLayer {
             scroll_x: 0,
             scroll_y: 0,
             priority: 0,
+            hidden_rect: None,
         }
     }
 }
@@ -247,10 +251,9 @@ pub struct WindowGlyph {
     pub double_rows: bool,
 }
 
-/// A window's 9-slice frame — pret `DrawFrameAndWindow1/2`'s border,
-/// drawn into the tilemap *around* the window rect (one tile thick,
-/// from `x-1, y-1`) from the frame graphics placed in the window's
-/// own char block.
+/// A window's border, drawn from graphics in its own char block.
+/// Menus use `DrawFrameAndWindow1`'s nine tiles; dialogue uses
+/// `DrawFrameAndWindow2`'s wider eighteen-tile layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowFrame {
     /// The char-block tile offset the frame NCGR loaded at.
@@ -258,6 +261,9 @@ pub struct WindowFrame {
     /// The palette bank of the border's tilemap entries (the frame
     /// NCLR loads 16 colors into this bank).
     pub palette: u8,
+    /// True for `DrawFrameAndWindow2`: an 18-tile dialogue border,
+    /// two tiles left and three tiles right of the window interior.
+    pub dialogue: bool,
 }
 
 /// The wait-for-input down arrow — `TextPrinter_DrawDownArrow`'s
@@ -265,9 +271,9 @@ pub struct WindowFrame {
 /// window's bottom-right corner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowArrow {
-    /// The arrow's base tile (`sDownArrowBaseTile`; the four frames
-    /// live at `+18..+21` stepping by 4, the cleared state at
-    /// `+10/+11`).
+    /// The dialogue frame's base tile (`sDownArrowBaseTile`). Three
+    /// composed arrow poses live at `+18..+29`; clearing restores
+    /// border tiles `+10/+11`.
     pub base_tile: u16,
     /// The animation position — one step per 8 held frames, walking
     /// `sDownArrowTileOffsets` = {0, 1, 2, 1}.
@@ -332,13 +338,16 @@ pub struct Window {
     /// The fill color index — `FillWindowPixelBuffer`'s current
     /// value, the window's background.
     pub fill: u8,
+    /// Rectangle fills applied over the background and before glyphs, in
+    /// window content pixels: `(x, y, width, height, palette_index)`.
+    pub fills: Vec<(u16, u16, u16, u16, u8)>,
     /// The glyphs printed so far, in print order (later glyphs draw
     /// over earlier ones, as blits do).
     pub glyphs: Vec<WindowGlyph>,
     /// The cumulative pixel scroll (`ScrollWindow`'s shifting, in
     /// the original applied to the buffer; here a translation).
     pub scroll: u16,
-    /// The 9-slice border around the rect, if drawn.
+    /// The menu or dialogue border around the rect, if drawn.
     pub frame: Option<WindowFrame>,
     /// The wait indicator at the rect's bottom-right corner, if
     /// shown.
@@ -372,6 +381,7 @@ impl Default for Window {
             palette: 0,
             base_tile: 0,
             fill: 0,
+            fills: Vec::new(),
             glyphs: Vec::new(),
             scroll: 0,
             frame: None,
@@ -392,7 +402,7 @@ pub mod plane {
     pub const BG2: u8 = 0x04;
     /// Engine BG3.
     pub const BG3: u8 = 0x08;
-    /// The OBJ (sprite) plane — always empty in Phase 3 (no sprites).
+    /// The OBJ (sprite) plane.
     pub const OBJ: u8 = 0x10;
     /// The backdrop.
     pub const BD: u8 = 0x20;
@@ -421,9 +431,8 @@ pub enum BlendEffect {
 /// the brightness effects carry the `BLDY` weight on [`Blend::evy`]
 /// (the sign that picked the effect is the effect itself —
 /// `GXx_SetBlendBrightness_` writes Down for a negative value, Up for a
-/// positive one). The rasterizer implements the alpha effect
-/// (`raster.rs`); the brightness effects are frame-model state for now —
-/// the Oak speech is their first user, and its fades end at evy 0.
+/// positive one). The rasterizer applies this to the displayed target
+/// plane before master brightness, including Oak's OBJ flash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Blend {
     /// The first-target plane mask (`plane::*` bits).
@@ -512,11 +521,135 @@ pub enum BrightnessMode {
     Down,
 }
 
+/// A sprite assembled from a ROM cell and animation bank.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sprite {
+    /// Character graphics.
+    pub tiles: AssetId,
+    /// OBJ palette, independent of BG palette RAM.
+    pub palette: AssetId,
+    /// Cell geometry and OAM attributes.
+    pub cells: AssetId,
+    /// Animation sequences.
+    pub animation: AssetId,
+    /// Active sequence index.
+    pub sequence: usize,
+    /// Ticks since the sequence was selected.
+    pub elapsed: u32,
+    /// Screen-space origin.
+    pub x: i16,
+    /// Screen-space origin.
+    pub y: i16,
+    /// Hardware OBJ priority relative to BG layers (0 is foremost).
+    pub priority: u8,
+    /// Base palette bank within the sprite's loaded palette. Each OAM
+    /// entry's bank is added to this placement offset.
+    pub palette_bank: u8,
+}
+
+/// One map-object billboard to draw this tick — the `mmodel` quad of
+/// `a/0/8/1` with one texel rectangle of its NSBTX shown
+/// (`docs/gfx.md`, "The billboard shear and map objects"). The field
+/// system builds one per visible object every tick; the rasterizer
+/// places the quad camera-facing at `world_pos` (the object's
+/// position vector — its feet) and `size_px` world units wide and
+/// tall, which the field presets scale ≈1:1 to pixels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectView {
+    /// The decoded frame strip (or single image): RGBA8, shared so a
+    /// frame clone never copies pixels.
+    pub texture: std::sync::Arc<crate::field::model::Texture>,
+    /// The texel rectangle `(u, v, width, height)` shown — the walk
+    /// frame within the strip.
+    pub rect: (u16, u16, u16, u16),
+    /// The anchor in fx32 world coordinates: the bottom centre of the
+    /// quad.
+    pub world_pos: [i32; 3],
+    /// The quad's width and height in world units (32 × 32 for the
+    /// standard `mmdl_m32x32` class).
+    pub size_px: (u16, u16),
+    /// Draw the rectangle mirrored left-to-right — the classes that
+    /// store one side view and flip it for the other facing.
+    pub mirrored: bool,
+}
+
+/// The field (3D) layer as one tick sees it — the plain-data view the
+/// field system publishes and the rasterizer draws as engine A's BG0
+/// (`docs/field-system.md`): the loaded map, the camera preset and its
+/// target, and the map-object billboards.
+///
+/// The scene is shared by `Arc` (a map load is the expensive part and
+/// happens only at warps); everything per-tick — the camera target
+/// (`FieldCamera`'s tracked position vector) and the objects' frames
+/// and positions — is copied into the frame, so a frame compares with
+/// `==` and replays without the system that produced it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldFrame {
+    /// The loaded map: cells, props, terrain, events.
+    pub scene: std::sync::Arc<crate::field::FieldScene>,
+    /// The camera preset in force (`FieldCamera_Create`'s row; scripts
+    /// may replace it later).
+    pub camera: crate::field::ov01::CameraPreset,
+    /// The camera's look-at target in fx32 world units — the player's
+    /// position vector (`Camera_SetFixedTarget`), before the preset's
+    /// look-at offset.
+    pub camera_target: [i32; 3],
+    /// The visible map objects, in draw order.
+    pub objects: Vec<ObjectView>,
+}
+
+impl FieldFrame {
+    /// The static view of a loaded scene: the header's camera preset
+    /// targeting the player's tile, and the scene's south-facing player
+    /// image as the one object standing on that tile — what the
+    /// Phase 4 bedroom landing showed, placed as the live system places
+    /// a standing player: the tile centre lifted to the ground height
+    /// the cells' BDHC plates give (`field::height`, 0 where none
+    /// covers the tile) for the camera target, plus
+    /// [`SPRITE_OFFSET`](crate::field::system::SPRITE_OFFSET) for the
+    /// billboard's anchor.
+    #[must_use]
+    pub fn static_scene(scene: std::sync::Arc<crate::field::FieldScene>) -> Self {
+        use crate::field::height::{HeightMode, scene_height};
+        use crate::field::map_object::VecFx32;
+        use crate::field::system::SPRITE_OFFSET;
+        let [x, z] = scene.position;
+        let tile = VecFx32::from_tile(x, 0, z);
+        let y = scene_height(&scene.cells, HeightMode::Nearest, tile.x, 0, tile.z).unwrap_or(0);
+        let target = [tile.x, y, tile.z];
+        let world_pos = [
+            tile.x + SPRITE_OFFSET.x,
+            y + SPRITE_OFFSET.y,
+            tile.z + SPRITE_OFFSET.z,
+        ];
+        let player = std::sync::Arc::new(scene.player.clone());
+        let size = (
+            u16::try_from(player.width).unwrap_or(u16::MAX),
+            u16::try_from(player.height).unwrap_or(u16::MAX),
+        );
+        let camera = scene.camera;
+        Self {
+            scene,
+            camera,
+            camera_target: target,
+            objects: vec![ObjectView {
+                texture: player,
+                rect: (0, 0, size.0, size.1),
+                world_pos,
+                size_px: size,
+                mirrored: false,
+            }],
+        }
+    }
+}
+
 /// One 2D engine's state — four text BG layers over the blend and
 /// brightness units, the named char-block slots, the composed BG
 /// palette RAM, and the message windows printing into the layers.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct EngineFrame {
+    /// The 3D field layer, when this engine displays a field map.
+    pub field: Option<FieldFrame>,
     /// The engine's four BG layers, BG0 through BG3. Engine A's BG0
     /// doubles as the 3D core's framebuffer when bound to a model
     /// (`GX_BG0_AS_3D`) — Phase 3 renders it absent (transparent),
@@ -535,8 +668,16 @@ pub struct EngineFrame {
     /// every 4bpp bank and 8bpp pixel of this engine decodes against,
     /// exactly the hardware's single RAM.
     pub palette_loads: Vec<PaletteLoad>,
+    /// Live BG palette words (color index, BGR555), applied after asset
+    /// loads. Scenes replace entries in place and clear affected entries
+    /// when reloading that palette range.
+    pub palette_overrides: Vec<(u16, u16)>,
+    /// Live OBJ palette words (absolute color index, BGR555).
+    pub obj_palette_overrides: Vec<(u16, u16)>,
     /// The message windows on this engine's layers.
     pub windows: Vec<Window>,
+    /// Visible sprites in OAM order (earlier wins a sprite overlap).
+    pub sprites: Vec<Sprite>,
     /// The tilemap-buffer rewrites made since the layers' screen
     /// assets loaded, applied after them at raster time in push order
     /// (a later edit wins). A screen load or tilemap clear for a layer
@@ -655,6 +796,7 @@ mod tests {
             palette: 12,
             base_tile: 0x36D,
             fill: 0xF,
+            fills: Vec::new(),
             glyphs: vec![
                 WindowGlyph {
                     font: AssetId::FIRST,
@@ -677,6 +819,7 @@ mod tests {
             frame: Some(WindowFrame {
                 base_tile: 0x3E2,
                 palette: 4,
+                dialogue: false,
             }),
             arrow: Some(WindowArrow {
                 base_tile: 0,
@@ -705,7 +848,8 @@ mod tests {
             ..focus
         };
         assert_eq!(
-            scrolled.scroll - focus.scroll, 16,
+            scrolled.scroll - focus.scroll,
+            16,
             "the scroll delta is the blit's shift"
         );
     }

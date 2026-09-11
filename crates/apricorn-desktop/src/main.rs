@@ -4,8 +4,7 @@
 //! shell around the headless core. Every tick runs
 //! [`apricorn_core::app::game::Game`]'s machine — the boot chain the
 //! title's timeout cycles, the save-check menu, and the new-game
-//! walk into Oak's speech (the naming screen past it is the next
-//! step, so the speech ends by stalling at the name overlay) — and
+//! walk through Oak's speech and its nested naming overlay — and
 //! every present rasterizes the machine's logical frame with
 //! [`apricorn_gfx::render`] and uploads it — the same pipeline the
 //! dump CLI and the golden-hash tests pin, so the window shows
@@ -17,8 +16,8 @@
 //! Input maps the keyboard onto the `REG_KEYXY` bits (the layout the
 //! engine consumes): A/B/X/Y on their same-letter keys, the arrows as
 //! the D-pad, Enter as START, Shift as SELECT, and L/R on their
-//! same-letter keys. Touch input is deferred with the touch model —
-//! every scene so far takes its pad path. Escape closes the window.
+//! same-letter keys. Left-click supplies stylus input on the bottom
+//! LCD, using the presenter's integer scaling. Escape closes the window.
 //!
 //! Usage: `cargo run -p apricorn-desktop [--rom <path>]` — the ROM
 //! defaults to `hg_usa.nds` in the working directory (repo root).
@@ -39,7 +38,7 @@ use apricorn_core::rtc::RtcDateTime;
 use presenter::Presenter;
 use runner::Pacer;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
@@ -80,6 +79,8 @@ struct Shell {
     game: Game,
     /// The `REG_KEYXY` bits currently held (bit set = held).
     keys: u16,
+    cursor: (f64, f64),
+    mouse_down: bool,
     window: Option<std::sync::Arc<Window>>,
     presenter: Option<Presenter>,
     /// The next tick's global frame index.
@@ -101,6 +102,8 @@ impl Shell {
             store,
             game,
             keys: 0,
+            cursor: (0.0, 0.0),
+            mouse_down: false,
             window: None,
             presenter: None,
             frame_index: 0,
@@ -117,10 +120,27 @@ impl Shell {
         }
         let input = Input {
             keys: Keys(self.keys),
-            touch: None,
+            touch: self
+                .window
+                .as_ref()
+                .filter(|_| self.mouse_down)
+                .and_then(|window| {
+                    let size = window.inner_size();
+                    presenter::touch_for_window(
+                        size.width,
+                        size.height,
+                        self.cursor.0,
+                        self.cursor.1,
+                    )
+                }),
         };
         for _ in 0..ticks {
-            let frame = self.game.tick(Frame { index: self.frame_index }, input);
+            let frame = self.game.tick(
+                Frame {
+                    index: self.frame_index,
+                },
+                input,
+            );
             self.last_frame = frame.clone();
             self.frame_index += 1;
         }
@@ -200,6 +220,21 @@ impl ApplicationHandler for Shell {
                         }
                     }
                 }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor = (position.x, position.y);
+            }
+            WindowEvent::CursorLeft { .. } => self.mouse_down = false,
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Left,
+                ..
+            } => {
+                self.mouse_down = state == ElementState::Pressed;
+            }
+            WindowEvent::Focused(false) => {
+                self.keys = 0;
+                self.mouse_down = false;
             }
             WindowEvent::RedrawRequested => self.redraw(),
             _ => {}

@@ -7,7 +7,13 @@ reimplements the game logic with behavioral equivalence: same RNG outcomes,
 same formulas, same save format.
 
 - The plan, phase by phase: [PLAN.md](PLAN.md)
-- Status: Phase 0 (scoping & research foundation)
+- Status: Phase 5 in progress — the new-game flow lands in a walkable
+  bedroom; stairs and doors warp between the house floors and New Bark
+  Town with movement, collision and camera ported from the original.
+  NPCs, dialogue, menus and lighting are next; exact scene parity is
+  tracked in Phase 8.
+- Run: `cargo run -p apricorn-desktop -- --rom hg_usa.nds`
+- Controls and remaining parity work: [game flow](docs/game-flow.md)
 
 ## Requirements
 

@@ -17,7 +17,7 @@
 //! | [`NewGameInit`] | `ov36_App_MainMenu_SelectOption_NewGame` | Oak's speech — `overlay_36.c:112` |
 //! | [`OakSpeech`] | `gApplication_OakSpeech` | post-Oak init — `oaks_speech.c:650` |
 //! | [`AfterOakSpeech`] | `ov36_App_InitGameState_AfterOakSpeech` | the field — `overlay_36.c:138` |
-//! | [`Bedroom`] | `gApplication_NewGameFieldsys` | terminal this phase (Phase 5 overworld) |
+//! | [`Field`] | `gApplication_NewGameFieldsys` | the live field ([`FieldSystem`]); terminal this phase |
 //! | [`Continue`] | the menu's app leaves | terminal this phase |
 //!
 //! [`IntroMovie`]: GameState::IntroMovie
@@ -27,7 +27,7 @@
 //! [`NewGameInit`]: GameState::NewGameInit
 //! [`OakSpeech`]: GameState::OakSpeech
 //! [`AfterOakSpeech`]: GameState::AfterOakSpeech
-//! [`Bedroom`]: GameState::Bedroom
+//! [`Field`]: GameState::Field
 //! [`Continue`]: GameState::Continue
 //!
 //! **Boot order** is `NitroMain`'s: probe the card backup
@@ -46,23 +46,18 @@
 //! machine re-seeds on the entering state's **first tick**, with that
 //! tick's index — the [`Frame`](crate::Frame) the caller hands it.
 //!
-//! **Scene ports pending** (same step, later landings): the naming
-//! screen nested inside Oak's speech is the ported [`OakSpeech`]'s
-//! one seam — the machine forwards
-//! [`Game::deliver_naming_result`](Self::deliver_naming_result) to
-//! it while it runs, the naming scene itself arriving with its port —
-//! and the post-Oak `ov36` pass remains a one-tick [`StubScene`] here.
-//! The machine ports the overlay *boundaries* faithfully (who runs
-//! after whom, what re-seeds, what the status flags say) and the
-//! scenes' inner frames arrive with their ports, plugged into the
-//! same [`GameState`] slots. Likewise deferred, until the structured
-//! save blocks land: the new-game save mutations
-//! (`NewGame_InitSaveData`: money 3000, position to the player's
-//! room, the fishing record, flag 960) and the post-Oak
-//! initialization (`InitGameStateAfterOakSpeech_Internal`: trainer
-//! ID, avatar, Safari Zone reset, the friend-group/Kenya mail, the
-//! ten Pokewalker seeds — all fed by the MT generator the machine
-//! seeds and holds).
+//! Oak launches [`NamingScreen`] as a nested overlay. The parent is
+//! suspended until its result is ready; default-name selection draws from
+//! this machine's LCRNG. Oak's confirmed identity is retained in
+//! [`PlayerIdentity`] at the field handoff and written into [`NewGameData`].
+//! The two `ov36` passes initialize the 42 save blocks and apply the
+//! post-Oak trainer ID, avatar, Safari areas, mail and Pokewalker seeds.
+//! Their scene boundaries are represented by one-tick [`InitPass`] values;
+//! full original-overlay scheduler timing still needs differential coverage.
+//! The field state runs [`FieldSystem`] — `CallFieldTask_NewGame`'s entry
+//! into the bedroom, then free movement, warps and the maps they lead
+//! to (`docs/field-system.md`); NPCs, scripts and menus are the next
+//! workstreams.
 //!
 //! The title screen's CLEARSAVE and MIC_TEST exits
 //! (`title_screen.c:250-259` — a key combo on the title screen, the
@@ -75,15 +70,18 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use crate::assets::AssetStore;
+use crate::field::system::FieldSystem;
 use crate::frame::LogicalFrame;
 use crate::input::Input;
 use crate::rng::{Lcrng, Mt19937};
 use crate::rtc::RtcDateTime;
+use crate::save::new_game::{ConsoleProfile, NewGameData};
 use crate::save::{SaveData, SaveError};
 
 use super::check_save::CheckSave;
 use super::intro_copyright::IntroCopyright;
 use super::main_menu::{MainMenu, MainMenuExit};
+use super::naming::NamingScreen;
 use super::oak_speech::OakSpeech;
 use super::title_screen::{TitleExit, TitleScreen};
 use super::{App, ChainNext};
@@ -125,15 +123,15 @@ pub enum GameState {
     /// The post-Oak `ov36` overlay — the rest of game-state init,
     /// then the field.
     AfterOakSpeech,
-    /// The new-game field entry: the player's bedroom. Phase 4's end
-    /// state — the overworld is Phase 5, so the machine holds here
-    /// (a cleared frame).
-    Bedroom,
+    /// The field — `gApplication_NewGameFieldsys`: the new game's entry
+    /// into the bedroom and everything the live [`FieldSystem`] runs
+    /// from there (movement, warps). The chain ends here this phase.
+    Field,
     /// The menu's CONTINUE and app leaves (`main_menu.c:1488-1515` —
     /// the Pokewalker, the mystery-gift and migrate apps, the Wii
     /// connect, the WFC setup, the Wii message settings): overlays
     /// later phases port. A cleared-frame leaf that never advances,
-    /// like [`Self::Bedroom`].
+    /// until the corresponding field/application port lands.
     Continue,
 }
 
@@ -161,18 +159,16 @@ impl fmt::Display for GameError {
 
 impl std::error::Error for GameError {}
 
-/// The one-tick stand-in for a scene whose port lands later in the
-/// step (the save-check banner, the menu, Oak's speech, the `ov36`
-/// init passes): a cleared frame, advancing on its first tick — the
-/// machine keeps the overlay boundary, the scene brings its frames.
-struct StubScene {
+/// One-tick boundary for an ov36 initialization pass. `Game::tick`
+/// applies its save mutations and RNG draws before ticking this value.
+struct InitPass {
     /// The cleared frame every tick shows.
     frame: LogicalFrame,
     /// Whether the first tick has run.
     ticked: bool,
 }
 
-impl App for StubScene {
+impl App for InitPass {
     fn tick(&mut self, _frame: crate::Frame, _input: Input) {
         self.ticked = true;
     }
@@ -204,26 +200,30 @@ enum Scene {
     MainMenu(MainMenu),
     /// `gApplication_OakSpeech` — Oak's speech app.
     Oak(OakSpeech),
-    /// The pending scene ports (see [`GameState`]'s per-state docs).
-    Stub(StubScene),
-    /// The bedroom, this phase's terminal state: a cleared frame,
-    /// forever (the fieldsys renders the room in Phase 5).
-    Bedroom(LogicalFrame),
+    /// New-game and post-Oak initialization boundaries.
+    Init(InitPass),
+    /// The live field: the bedroom entry and everything after it.
+    Field(FieldSystem),
     /// The menu's CONTINUE and app leaves, this phase's other
     /// terminal state: a cleared frame, forever.
     Continue(LogicalFrame),
 }
 
 impl Scene {
-    fn tick(&mut self, frame: crate::Frame, input: Input) {
+    /// Ticks the scene; the field reads the asset store for map loads
+    /// at warps, so it takes the store the others captured at load.
+    fn tick(&mut self, frame: crate::Frame, input: Input, store: &Mutex<AssetStore>) {
         match self {
             Scene::Intro(app) => app.tick(frame, input),
             Scene::Title(app) => app.tick(frame, input),
             Scene::CheckSave(app) => app.tick(frame, input),
             Scene::MainMenu(app) => app.tick(frame, input),
             Scene::Oak(app) => app.tick(frame, input),
-            Scene::Stub(stub) => stub.tick(frame, input),
-            Scene::Bedroom(_) | Scene::Continue(_) => {}
+            Scene::Init(stub) => stub.tick(frame, input),
+            Scene::Field(field) => {
+                field.tick(input, &store.lock().expect("asset store"));
+            }
+            Scene::Continue(_) => {}
         }
     }
 
@@ -234,8 +234,9 @@ impl Scene {
             Scene::CheckSave(app) => app.frame(),
             Scene::MainMenu(app) => app.frame(),
             Scene::Oak(app) => app.frame(),
-            Scene::Stub(stub) => stub.frame(),
-            Scene::Bedroom(frame) | Scene::Continue(frame) => frame,
+            Scene::Init(stub) => stub.frame(),
+            Scene::Field(field) => field.frame(),
+            Scene::Continue(frame) => frame,
         }
     }
 
@@ -246,8 +247,8 @@ impl Scene {
             Scene::CheckSave(app) => app.next(),
             Scene::MainMenu(app) => app.next(),
             Scene::Oak(app) => app.next(),
-            Scene::Stub(stub) => stub.next(),
-            Scene::Bedroom(_) | Scene::Continue(_) => ChainNext::Stay,
+            Scene::Init(stub) => stub.next(),
+            Scene::Field(_) | Scene::Continue(_) => ChainNext::Stay,
         }
     }
 }
@@ -261,6 +262,12 @@ impl Scene {
 /// constructed fresh at every entry (a timeout cycle back to the
 /// intro is a true reset, as the overlay reload is).
 pub struct Game {
+    /// The live region is separate from the loaded card until saved.
+    new_game: Option<NewGameData>,
+    /// The nested overlay launched by Oak; the parent is suspended.
+    naming: Option<NamingScreen>,
+    /// Oak's confirmed identity, retained across the field handoff.
+    player: Option<PlayerIdentity>,
     /// The pinned asset store both boot scenes load from (shared
     /// with the presenter, as `boot_chain`'s is).
     store: Arc<Mutex<AssetStore>>,
@@ -279,7 +286,7 @@ pub struct Game {
     /// The main field RNG, seeded by `InitializeMainRNG`.
     lcrng: Lcrng,
     /// The boot-seeded MT generator, seeded alongside it (its first
-    /// engine draws are the deferred post-Oak init's).
+    /// engine draws include both ov36 initialization passes).
     mtrng: Mt19937,
     /// Whether the entering state's first tick runs
     /// `InitializeMainRNG` (the `ov36` inits do; see the module doc).
@@ -291,6 +298,15 @@ pub struct Game {
     /// The finishing state's last frame, kept across a transition so
     /// the advancing tick still returns it.
     last: Option<LogicalFrame>,
+}
+
+/// The player choices confirmed during Oak's introduction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerIdentity {
+    /// Trainer name in the game's character encoding.
+    pub name: GameString,
+    /// Avatar selection (0 male, 1 female).
+    pub gender: u8,
 }
 
 impl Game {
@@ -337,14 +353,16 @@ impl Game {
                 // game continues behind CheckSave's erase warning.
                 Err(SaveError::Corrupt) => (None, SAVE_STATUS_TOTAL_FAIL),
                 Err(SaveError::NotACardBackup { got }) => {
-                    return Err(GameError::NotACardBackup { got })
+                    return Err(GameError::NotACardBackup { got });
                 }
             },
         };
         let mut game = Self {
+            new_game: None,
+            naming: None,
+            player: None,
             scene: Scene::Intro(
-                IntroCopyright::load(&store)
-                    .expect("the pinned ROM's copyright-beat members load"),
+                IntroCopyright::load(&store).expect("the pinned ROM's copyright-beat members load"),
             ),
             store,
             state: GameState::IntroMovie,
@@ -366,6 +384,21 @@ impl Game {
     #[must_use]
     pub fn state(&self) -> GameState {
         self.state
+    }
+
+    /// The nested naming overlay, when active. The main state remains Oak.
+    pub fn naming(&self) -> Option<&NamingScreen> {
+        self.naming.as_ref()
+    }
+
+    /// Confirmed player choices, available after Oak's exit.
+    pub fn player(&self) -> Option<&PlayerIdentity> {
+        self.player.as_ref()
+    }
+
+    /// Initialized new-game save state, available after selecting NEW GAME.
+    pub fn new_game_data(&self) -> Option<&NewGameData> {
+        self.new_game.as_ref()
     }
 
     /// The loaded card backup, when one exists — `SaveData_New`'s
@@ -417,18 +450,14 @@ impl Game {
         self.menu_exit
     }
 
-    /// The naming screen's delivered result, forwarded to Oak's
-    /// speech while it runs — the speech's own overlay seam (its
-    /// `OverlayManager_Run` reporting TRUE, `oaks_speech.c:622-626`).
-    ///
-    /// # Panics
-    /// Panics outside [`GameState::OakSpeech`] — only the speech's
-    /// nested naming screen produces a result.
-    pub fn deliver_naming_result(&mut self, name: GameString) {
-        let Scene::Oak(oak) = &mut self.scene else {
-            unreachable!("only Oak's speech takes a naming result");
-        };
-        oak.deliver_naming_result(name);
+    /// The live field system, while the machine is in
+    /// [`GameState::Field`].
+    #[must_use]
+    pub fn field(&self) -> Option<&FieldSystem> {
+        match &self.scene {
+            Scene::Field(field) => Some(field),
+            _ => None,
+        }
     }
 
     /// The current scene's logical frame (the running overlay's
@@ -437,7 +466,9 @@ impl Game {
     /// frame across).
     #[must_use]
     pub fn frame(&self) -> &LogicalFrame {
-        self.scene.frame()
+        self.naming
+            .as_ref()
+            .map_or_else(|| self.scene.frame(), |n| n.frame())
     }
 
     /// Advances the game one tick: the running overlay's scene ticks,
@@ -448,14 +479,63 @@ impl Game {
     /// frame, or on an advancing tick the finishing state's last
     /// frame — the next tick belongs to the new state.
     pub fn tick(&mut self, frame: crate::Frame, input: Input) -> &LogicalFrame {
+        if let Scene::Oak(oak) = &mut self.scene {
+            if oak.naming_requested() && self.naming.is_none() {
+                self.naming = Some(
+                    NamingScreen::load(&self.store, oak.player_gender())
+                        .expect("the pinned ROM's naming members load"),
+                );
+            }
+            if let Some(naming) = &mut self.naming {
+                naming.tick(frame, input);
+                if naming.next() == ChainNext::Advance {
+                    let name = naming.result(&mut self.lcrng).clone();
+                    self.last = Some(naming.frame().clone());
+                    oak.deliver_naming_result(name);
+                    oak.tick(frame, input);
+                    self.naming = None;
+                    return self.last.as_ref().expect("naming's finishing frame");
+                }
+                return self.naming.as_ref().unwrap().frame();
+            }
+        }
         if self.pending_reseed {
             // The ov36 inits run InitializeMainRNG at overlay
             // construction — one frame after the exit — so the seed
             // reads this tick's frame index.
             self.pending_reseed = false;
             self.initialize_main_rng(frame.index);
+            match self.state {
+                GameState::NewGameInit => {
+                    self.new_game = Some(
+                        NewGameData::initialize(
+                            &self.store.lock().expect("asset store"),
+                            self.rtc,
+                            frame.index,
+                            &mut self.mtrng,
+                            ConsoleProfile::default(),
+                        )
+                        .expect("the pinned ROM's new-game data loads"),
+                    );
+                }
+                GameState::AfterOakSpeech => {
+                    let player = self.player.as_ref().expect("Oak confirmed a player");
+                    self.new_game
+                        .as_mut()
+                        .expect("NEW GAME initialized save data")
+                        .finish_oak(
+                            &player.name,
+                            player.gender,
+                            self.rtc,
+                            &mut self.mtrng,
+                            &mut self.lcrng,
+                            ConsoleProfile::default(),
+                        );
+                }
+                _ => {}
+            }
         }
-        self.scene.tick(frame, input);
+        self.scene.tick(frame, input, &self.store);
         if self.scene.next() == ChainNext::Advance {
             // Retain the finishing frame, then swap in the next
             // state's scene, constructed fresh.
@@ -479,6 +559,12 @@ impl Game {
     /// the new scene — each transition cited per-state in the module
     /// table.
     fn advance(&mut self) {
+        if let Scene::Oak(oak) = &self.scene {
+            self.player = Some(PlayerIdentity {
+                name: oak.player_name().clone(),
+                gender: oak.player_gender(),
+            });
+        }
         if self.state == GameState::MainMenu {
             // Keep the menu's pick past the advance that replaces
             // the scene — `MainMenu_QueueSelectedApp`'s argument.
@@ -494,8 +580,10 @@ impl Game {
         // The ov36 overlays re-seed at init: the new-game pass and
         // the post-Oak pass (overlay_36.c:96, :120). Their
         // CONTINUE sibling (:145) joins with the menu's port.
-        self.pending_reseed =
-            matches!(self.state, GameState::NewGameInit | GameState::AfterOakSpeech);
+        self.pending_reseed = matches!(
+            self.state,
+            GameState::NewGameInit | GameState::AfterOakSpeech
+        );
         self.scene = self.scene_for(self.state);
     }
 
@@ -549,8 +637,8 @@ impl Game {
             // oaks_speech.c:650.
             GameState::OakSpeech => GameState::AfterOakSpeech,
             // overlay_36.c:138 — gApplication_NewGameFieldsys.
-            GameState::AfterOakSpeech => GameState::Bedroom,
-            GameState::Bedroom | GameState::Continue => {
+            GameState::AfterOakSpeech => GameState::Field,
+            GameState::Field | GameState::Continue => {
                 unreachable!("the terminal states never advance")
             }
         }
@@ -565,8 +653,7 @@ impl Game {
                     .expect("the pinned ROM's copyright-beat members load"),
             ),
             GameState::Title => Scene::Title(
-                TitleScreen::load(&self.store)
-                    .expect("the pinned ROM's title-screen members load"),
+                TitleScreen::load(&self.store).expect("the pinned ROM's title-screen members load"),
             ),
             GameState::CheckSave => Scene::CheckSave(
                 CheckSave::load(&self.store, self.save_status_flags)
@@ -580,11 +667,19 @@ impl Game {
                 OakSpeech::load(&self.store, self.rtc)
                     .expect("the pinned ROM's Oak-speech members load"),
             ),
-            GameState::NewGameInit | GameState::AfterOakSpeech => Scene::Stub(StubScene {
+            GameState::NewGameInit | GameState::AfterOakSpeech => Scene::Init(InitPass {
                 frame: LogicalFrame::default(),
                 ticked: false,
             }),
-            GameState::Bedroom => Scene::Bedroom(LogicalFrame::default()),
+            GameState::Field => {
+                // CallFieldTask_NewGame: the field at sLocation_PlayerRoom
+                // with the confirmed gender's sprite.
+                let gender = self.player.as_ref().expect("Oak confirmed a player").gender;
+                Scene::Field(
+                    FieldSystem::new_game(&self.store.lock().expect("asset store"), gender)
+                        .expect("the pinned ROM's bedroom assets load"),
+                )
+            }
             GameState::Continue => Scene::Continue(LogicalFrame::default()),
         }
     }

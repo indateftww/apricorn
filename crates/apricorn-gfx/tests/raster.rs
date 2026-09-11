@@ -13,8 +13,8 @@ use apricorn_core::cache;
 use apricorn_core::font::Font;
 use apricorn_core::frame::{
     ARROW_TILE_OFFSETS, AssetId, BgLayer, Blend, BlendEffect, BrightnessMode, ColorMode,
-    EngineFrame, LogicalFrame, MasterBrightness, PaletteLoad, TextColor, TilePlacement, Window,
-    WindowArrow, WindowFocus, WindowFrame, WindowGlyph, plane,
+    EngineFrame, LogicalFrame, MasterBrightness, PaletteLoad, Sprite, TextColor, TilePlacement,
+    Window, WindowArrow, WindowFocus, WindowFrame, WindowGlyph, plane,
 };
 use apricorn_gfx::{AssetSource, ScreenBuffer, render};
 use sha1::{Digest, Sha1};
@@ -29,6 +29,8 @@ enum Fix {
     Screen(cache::Screen),
     Palette(Vec<[u8; 4]>),
     Font(Font),
+    Cells(cache::Cells),
+    Animation(cache::Animation),
 }
 
 /// An in-memory [`AssetSource`]: handles index the added assets in
@@ -38,6 +40,49 @@ struct FixtureStore {
 }
 
 impl FixtureStore {
+    fn add_sprite(&mut self, tiles: AssetId, palette: AssetId) -> Sprite {
+        self.add_sprite_with_bank(tiles, palette, 0)
+    }
+
+    fn add_sprite_with_bank(&mut self, tiles: AssetId, palette: AssetId, bank: u8) -> Sprite {
+        let header = |kind: cache::ChunkKind| {
+            let mut chunk = cache::MAGIC.to_vec();
+            chunk.extend_from_slice(&cache::VERSION.to_le_bytes());
+            chunk.extend_from_slice(&kind.code().to_le_bytes());
+            chunk
+        };
+        let mut chunk = header(cache::ChunkKind::Cells);
+        chunk.extend_from_slice(&[1, 0, 0, 0]); // one cell, 1D32K
+        chunk.extend_from_slice(&[1, 0, 0, 0]); // one OAM entry
+        for v in [-2i16, 252, 0, 252, 510, 0] {
+            chunk.extend_from_slice(&v.to_le_bytes());
+        }
+        chunk.extend_from_slice(&[bank, 0, 0, 0, 0, 0]); // palette, priority, shape, size, flags, mode
+        chunk.extend_from_slice(&[0; 2]); // no labels
+        let cells = AssetId::from_index(self.items.len());
+        self.items
+            .push(Fix::Cells(cache::Cells::parse(&chunk).unwrap()));
+        let mut chunk = header(cache::ChunkKind::Animation);
+        chunk.extend_from_slice(&[1, 0]); // one sequence
+        chunk.extend_from_slice(&[1, 0, 0, 0, 1, 0, 0, 0]); // one frame, forward, cell-only
+        chunk.extend_from_slice(&[0, 0, 1, 0]); // cell 0, duration 1
+        chunk.extend_from_slice(&[0; 16]); // translation, rotation, scale
+        let animation = AssetId::from_index(self.items.len());
+        self.items
+            .push(Fix::Animation(cache::Animation::parse(&chunk).unwrap()));
+        Sprite {
+            tiles,
+            palette,
+            cells,
+            animation,
+            sequence: 0,
+            elapsed: 0,
+            x: 4,
+            y: 6,
+            priority: 0,
+            palette_bank: 1,
+        }
+    }
     fn new() -> Self {
         Self { items: Vec::new() }
     }
@@ -127,20 +172,31 @@ impl FixtureStore {
             // Glyph `index`: the given rows (level L per row: both
             // half rows the byte L·0b01010101... pairs), or zero.
             for row in 0..8 {
-                let level = glyphs
-                    .get(index)
-                    .map_or(0, |rows| rows[row]);
+                let level = glyphs.get(index).map_or(0, |rows| rows[row]);
                 let byte = level * 0b01010101;
                 data.push(byte); // low byte: pixels 4-7
                 data.push(byte); // high byte: pixels 0-3
             }
         }
-        self.items.push(Fix::Font(Font::parse(&data).expect("fixture font parses")));
+        self.items
+            .push(Fix::Font(Font::parse(&data).expect("fixture font parses")));
         AssetId::from_index(self.items.len() - 1)
     }
 }
 
 impl AssetSource for FixtureStore {
+    fn cells(&self, id: AssetId) -> Option<&cache::Cells> {
+        match self.items.get(id.index()) {
+            Some(Fix::Cells(cells)) => Some(cells),
+            _ => None,
+        }
+    }
+    fn animation(&self, id: AssetId) -> Option<&cache::Animation> {
+        match self.items.get(id.index()) {
+            Some(Fix::Animation(animation)) => Some(animation),
+            _ => None,
+        }
+    }
     fn tiles(&self, id: AssetId) -> Option<&cache::Tiles> {
         match self.items.get(id.index()) {
             Some(Fix::Tiles(tiles)) => Some(tiles),
@@ -206,7 +262,10 @@ fn load_palette(asset: AssetId) -> PaletteLoad {
 
 /// One tile-set placement at tile offset 0.
 fn place(tiles: AssetId) -> TilePlacement {
-    TilePlacement { asset: tiles, tile: 0 }
+    TilePlacement {
+        asset: tiles,
+        tile: 0,
+    }
 }
 
 /// One engine: `layers` at BG0.., tiles placed per `(slot, asset)`,
@@ -339,10 +398,7 @@ fn later_placements_win_an_overlap_and_palette_loads_compose_in_order() {
     let red = store.add_tiles(0, &[1u8; 64]);
     let green = store.add_tiles(0, &[2u8; 64]);
     let screen = store.add_screen(8, 8, &[entry(0, false, false, 0)]);
-    let palette = store.add_palette(
-        true,
-        &[[0, 0, 0, 255], [255, 0, 0, 255], [0, 255, 0, 255]],
-    );
+    let palette = store.add_palette(true, &[[0, 0, 0, 255], [255, 0, 0, 255], [0, 255, 0, 255]]);
     let mut e = engine(&[bg_layer(screen)], &[], palette);
     e.char_blocks[0].push(place(red));
     e.char_blocks[0].push(place(green));
@@ -351,7 +407,11 @@ fn later_placements_win_an_overlap_and_palette_loads_compose_in_order() {
         ..LogicalFrame::default()
     };
     let [main, _] = render(&frame, &store);
-    assert_eq!(main.pixel(0, 0), [0, 255, 0, 255], "the later placement wins");
+    assert_eq!(
+        main.pixel(0, 0),
+        [0, 255, 0, 255],
+        "the later placement wins"
+    );
 
     // Palette RAM composes in order: a 1-color load at offset 2
     // overwrites the green the winning tile displays.
@@ -363,7 +423,11 @@ fn later_placements_win_an_overlap_and_palette_loads_compose_in_order() {
         colors: 1,
     });
     let [main, _] = render(&frame, &store);
-    assert_eq!(main.pixel(0, 0), [9, 9, 9, 255], "the later load overwrites");
+    assert_eq!(
+        main.pixel(0, 0),
+        [9, 9, 9, 255],
+        "the later load overwrites"
+    );
 
     // A load past RAM's end clips, not panics.
     frame.main.palette_loads.push(PaletteLoad {
@@ -372,7 +436,11 @@ fn later_placements_win_an_overlap_and_palette_loads_compose_in_order() {
         colors: 100,
     });
     let [main, _] = render(&frame, &store);
-    assert_eq!(main.pixel(0, 0), [9, 9, 9, 255], "the clip keeps RAM intact");
+    assert_eq!(
+        main.pixel(0, 0),
+        [9, 9, 9, 255],
+        "the clip keeps RAM intact"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -647,6 +715,7 @@ fn window_frame(store: &mut FixtureStore) -> (LogicalFrame, AssetId) {
         palette: 2,
         base_tile: 0,
         fill: 0xF,
+        fills: Vec::new(),
         glyphs: vec![
             WindowGlyph {
                 font,
@@ -670,7 +739,13 @@ fn window_frame(store: &mut FixtureStore) -> (LogicalFrame, AssetId) {
         arrow: None,
         focus: None,
     });
-    (LogicalFrame { main: e, ..LogicalFrame::default() }, font)
+    (
+        LogicalFrame {
+            main: e,
+            ..LogicalFrame::default()
+        },
+        font,
+    )
 }
 
 #[test]
@@ -732,9 +807,7 @@ fn window_frame_and_arrow_draw_from_the_owning_char_block() {
     let mut store = FixtureStore::new();
     // 30 uniform tiles, tile n = value (n % 15) + 1: the frame border
     // (tiles 0-8) and the arrow's first two frames (18-21, 22-25).
-    let pixels: Vec<u8> = (0..30)
-        .flat_map(|n| [((n % 15) + 1) as u8; 64])
-        .collect();
+    let pixels: Vec<u8> = (0..30).flat_map(|n| [((n % 15) + 1) as u8; 64]).collect();
     let tiles = store.add_tiles(0, &pixels);
     let palette = store.add_palette(true, &gray_palette(64));
     let mut e = EngineFrame::default();
@@ -756,10 +829,12 @@ fn window_frame_and_arrow_draw_from_the_owning_char_block() {
         base_tile: 0,
         fill: 1,
         glyphs: Vec::new(),
+        fills: Vec::new(),
         scroll: 0,
         frame: Some(WindowFrame {
             base_tile: 0,
             palette: 3,
+            dialogue: false,
         }),
         arrow: Some(WindowArrow {
             base_tile: 0,
@@ -800,8 +875,16 @@ fn window_frame_and_arrow_draw_from_the_owning_char_block() {
         index: 2,
     });
     let [main, _] = render(&frame, &store);
-    assert_eq!(main.pixel(32, 8)[0], 16 + ((26 % 15) + 1), "index 2: tile 26");
-    assert_eq!(ARROW_TILE_OFFSETS, [0, 1, 2, 1], "the cycle the index walks");
+    assert_eq!(
+        main.pixel(32, 8)[0],
+        16 + ((26 % 15) + 1),
+        "index 2: tile 26"
+    );
+    assert_eq!(
+        ARROW_TILE_OFFSETS,
+        [0, 1, 2, 1],
+        "the cycle the index walks"
+    );
 }
 
 #[test]
@@ -835,6 +918,7 @@ fn window_focus_indicator_blits_its_frame_in_the_reserved_column() {
         palette: 2,
         base_tile: 0,
         fill: 0xF,
+        fills: Vec::new(),
         glyphs: vec![WindowGlyph {
             font,
             glyph: 1,
@@ -880,7 +964,7 @@ fn window_focus_indicator_blits_its_frame_in_the_reserved_column() {
     // A scroll landing after the blit lifts it with the content —
     // its last rows vacate to the fill — while the print-time scroll
     // rides along unchanged.
-    frame.main.windows[0].scroll = 4;
+    frame.main.windows.last_mut().unwrap().scroll = 4;
     let [main, _] = render(&frame, &store);
     assert_eq!(
         main.pixel(40, 36)[0],
@@ -922,6 +1006,7 @@ fn later_windows_draw_over_earlier_ones() {
             base_tile: 0,
             fill,
             glyphs: Vec::new(),
+            fills: Vec::new(),
             scroll: 0,
             frame: None,
             arrow: None,
@@ -1102,4 +1187,603 @@ fn golden_composite_scene_hashes_stably() {
         "31c8daa3770fde1d76332d8aac4f53357adc1ce6",
         "engine B golden hash (empty, undimmed black)"
     );
+}
+
+#[test]
+fn window_zero_indices_reveal_lower_planes_not_the_replaced_tilemap() {
+    let mut store = FixtureStore::new();
+    let (mut frame, _) = window_frame(&mut store);
+    let screen = store.add_screen(8, 8, &[entry(0, false, false, 0)]);
+    let old = store.add_tiles(0, &[5; 64]);
+    let under = store.add_tiles(0, &[7; 64]);
+    frame.main.bgs[0].screen = Some(screen);
+    frame.main.char_blocks[0].push(place(old));
+    frame.main.bgs[1] = BgLayer {
+        char_base: 1,
+        ..bg_layer(screen)
+    };
+    frame.main.char_blocks[1].push(place(under));
+    frame.main.windows[0].fill = 0;
+    frame.main.windows[0].glyphs[0].color.fg = 0;
+    let [main, _] = render(&frame, &store);
+    assert_eq!(main.pixel(0, 0)[0], 5, "old BG0 outside the window");
+    assert_eq!(
+        main.pixel(16, 16)[0],
+        7,
+        "glyph ink mapped to zero reveals BG1"
+    );
+    assert_eq!(
+        main.pixel(31, 31)[0],
+        7,
+        "zero fill reveals BG1, not palette-bank color 0"
+    );
+    assert_eq!(main.pixel(16, 17)[0], 34, "nonzero shadow remains opaque");
+}
+
+#[test]
+fn obj_cells_use_signed_offsets_separate_palettes_and_hardware_priority() {
+    let mut store = FixtureStore::new();
+    let tiles = store.add_tiles(0, &(0..64).map(|i| (i % 8) as u8).collect::<Vec<_>>());
+    let obj_palette = store.add_palette(true, &gray_palette(32));
+    let sprite = store.add_sprite(tiles, obj_palette);
+    let bg_tiles = store.add_tiles(0, &[9; 64]);
+    let bg_palette = store.add_palette(true, &[[99, 99, 99, 255]; 16]);
+    let screen = store.add_screen(8, 8, &[0]);
+    let mut frame = LogicalFrame::default();
+    frame.main.sprites.push(sprite);
+    frame.main.bgs[0] = bg_layer(screen);
+    frame.main.char_blocks[0].push(place(bg_tiles));
+    frame.main.palette_loads.push(load_palette(bg_palette));
+    let [main, _] = render(&frame, &store);
+    assert_eq!(
+        main.pixel(3, 2)[0],
+        17,
+        "(4,6) + signed (-2,-4), independent OBJ palette bank 1"
+    );
+    assert_eq!(main.pixel(2, 2)[0], 99, "OBJ index zero reveals BG0");
+    assert_eq!(main.pixel(9, 9)[0], 23, "8x8 cell ends at (9,9)");
+    assert_eq!(main.pixel(10, 9)[0], 99, "outside the cell");
+    frame.main.sprites[0].priority = 1;
+    assert_eq!(
+        render(&frame, &store)[0].pixel(3, 2)[0],
+        99,
+        "higher-priority BG hides OBJ"
+    );
+    frame.main.sprites[0].priority = 0;
+    frame.main.blend = Blend {
+        plane1: plane::OBJ,
+        effect: BlendEffect::BrightnessUp,
+        evy: 16,
+        ..Blend::default()
+    };
+    let [main, _] = render(&frame, &store);
+    assert_eq!(main.pixel(3, 2), [255; 4], "OBJ participates in the flash");
+    assert_eq!(main.pixel(2, 2)[0], 99, "the flash leaves BG0 alone");
+}
+
+#[test]
+fn obj_cell_palette_bank_is_added_to_resource_placement() {
+    let mut store = FixtureStore::new();
+    let tiles = store.add_tiles(0, &[1; 64]);
+    let palette = store.add_palette(true, &gray_palette(256));
+    let sprite = store.add_sprite_with_bank(tiles, palette, 2);
+    let mut frame = LogicalFrame::default();
+    frame.main.sprites.push(sprite);
+    assert_eq!(
+        render(&frame, &store)[0].pixel(3, 2)[0],
+        49,
+        "resource bank 1 + OAM bank 2"
+    );
+    frame.main.sprites[0].palette_bank = 15;
+    assert_eq!(
+        render(&frame, &store)[0].pixel(3, 2)[0],
+        17,
+        "bank addition wraps at 16"
+    );
+}
+
+#[test]
+fn window_rect_fills_are_clipped_ordered_and_scroll_with_content() {
+    let mut store = FixtureStore::new();
+    let (mut frame, _) = window_frame(&mut store);
+    frame.main.windows.push(Window {
+        width: 2,
+        height: 2,
+        fill: 1,
+        palette: 0,
+        fills: vec![(4, 4, 8, 8, 2), (8, 8, 20, 20, 3)],
+        ..Window::default()
+    });
+    let [screen, _] = render(&frame, &store);
+    assert_eq!(screen.pixel(0, 0)[0], 1);
+    assert_eq!(screen.pixel(4, 4)[0], 2);
+    assert_eq!(screen.pixel(8, 8)[0], 3);
+    frame.main.windows.last_mut().unwrap().scroll = 4;
+    assert_eq!(render(&frame, &store)[0].pixel(4, 0)[0], 2);
+}
+
+#[test]
+fn zero_color_glyph_pixels_preserve_window_background() {
+    let mut store = FixtureStore::new();
+    let (mut frame, font) = window_frame(&mut store);
+    frame.main.windows.clear();
+    frame.main.windows.push(Window {
+        width: 2,
+        height: 2,
+        fill: 4,
+        glyphs: vec![WindowGlyph {
+            font,
+            glyph: 2,
+            x: 0,
+            y: 0,
+            color: TextColor::new(14, 15, 0),
+            double_rows: false,
+        }],
+        ..Window::default()
+    });
+    // Fixture glyph 2 is entirely level 3 (background), mapped to 0.
+    assert_eq!(render(&frame, &store)[0].pixel(0, 0)[0], 4);
+}
+
+#[test]
+fn hardware_window_masks_scrolled_bg_and_its_message_windows() {
+    let mut store = FixtureStore::new();
+    let (mut frame, _) = window_frame(&mut store);
+    frame.main.bgs[0].hidden_rect = Some((0, 0, 255, 24));
+    let [screen, _] = render(&frame, &store);
+    assert_eq!(screen.pixel(16, 16), [0, 0, 0, 255]);
+    assert_ne!(screen.pixel(16, 24), [0, 0, 0, 255]);
+}
+
+#[test]
+fn dialogue_border_uses_all_eighteen_tiles_and_arrow_keeps_border_palette() {
+    let mut store = FixtureStore::new();
+    let tiles = store.add_tiles(
+        0,
+        &(0..30)
+            .flat_map(|n| [(n % 15 + 1) as u8; 64])
+            .collect::<Vec<_>>(),
+    );
+    let palette = store.add_palette(true, &gray_palette(80));
+    let mut frame = LogicalFrame::default();
+    frame.main.bgs[0].enabled = true;
+    frame.main.char_blocks[0].push(place(tiles));
+    frame.main.palette_loads.push(load_palette(palette));
+    frame.main.windows.push(Window {
+        left: 2,
+        top: 2,
+        width: 3,
+        height: 4,
+        palette: 2,
+        fill: 15,
+        frame: Some(WindowFrame {
+            base_tile: 0,
+            palette: 4,
+            dialogue: true,
+        }),
+        ..Window::default()
+    });
+    let [main, _] = render(&frame, &store);
+    // The original writes six columns per row: two left, repeated
+    // center, and three right. Mid-row center is the window buffer.
+    for (y, row) in [(8, 0), (16, 1), (48, 2)] {
+        for (x, column) in [(0, 0), (8, 1), (16, 2), (40, 3), (48, 4), (56, 5)] {
+            if row == 1 && column == 2 {
+                continue;
+            }
+            assert_eq!(
+                main.pixel(x, y)[0],
+                64 + ((row * 6 + column) % 15 + 1) as u8
+            );
+        }
+    }
+    frame.main.windows[0].arrow = Some(WindowArrow {
+        base_tile: 0,
+        index: 0,
+    });
+    let [main, _] = render(&frame, &store);
+    assert_eq!(
+        main.pixel(48, 32)[0],
+        68,
+        "arrow tile 18 replaces the side border, preserving bank 4"
+    );
+}
+
+/// The dialogue box's extents, pinned against pret's geometry after a
+/// retail comparison that questioned them (`docs/game-flow.md`,
+/// "Rendering fixes"):
+///
+/// * the interior fill spans exactly `width` tiles — `sub_0200E6B4`
+///   (`render_window.s`) then writes three border columns to its
+///   right (`x+width`, `+1`, `+2`: tiles `+3/+4/+5`, `+9/+10/+11`,
+///   `+15/+16/+17`) and two to its left. The dark band inside the
+///   retail box's right end *is* border art (`+10`/`+11`), not a fill
+///   shortfall, so the fill must stop at the interior's edge;
+/// * `TextPrinter_DrawDownArrow` (`render_text.c:395-449`) lands its
+///   2×2 block on columns `x+width+1..+2`, rows `y+height-2..-1` —
+///   over `+10`/`+11` — from tiles `base+18 + {0,1,2,1}[index]·4 +
+///   pos`, keeping the border's palette bank (`0x10`); index 3 is
+///   index 1's tiles;
+/// * `RenderScreenFocusIndicatorTile` (`text.c:296-306`) blits the
+///   `{YESNO}` screen-focus icon *inside* the buffer at
+///   `(width-3)·8` — it never reaches the border or the arrow block.
+#[test]
+fn dialogue_fill_border_arrow_and_focus_extents_follow_pret() {
+    let mut store = FixtureStore::new();
+    // Frame tiles: tile n uniform value n % 15 + 1 (bank 4 → 64 + v).
+    let frame_tiles = store.add_tiles(
+        0,
+        &(0..30)
+            .flat_map(|n| [(n % 15 + 1) as u8; 64])
+            .collect::<Vec<_>>(),
+    );
+    // The focus NCGR: four 12-tile frames, tile i uniform i % 16 + 1
+    // shifted so no tile is the colorKey 0 (values 1..=15, then 1).
+    let focus_gfx = store.add_tiles(
+        0,
+        &(0..48)
+            .flat_map(|i| [(i % 15 + 1) as u8; 64])
+            .collect::<Vec<_>>(),
+    );
+    let palette = store.add_palette(true, &gray_palette(96));
+    let mut frame = LogicalFrame::default();
+    frame.main.bgs[0].enabled = true;
+    frame.main.char_blocks[0].push(place(frame_tiles));
+    frame.main.palette_loads.push(load_palette(palette));
+    // sWindowTemplate_DialogMsg's shape (27×4 at (2, 19)) scaled to
+    // 5×4 at (2, 2): interior pixels (16..56, 16..48).
+    frame.main.windows.push(Window {
+        left: 2,
+        top: 2,
+        width: 5,
+        height: 4,
+        palette: 2,
+        fill: 15,
+        frame: Some(WindowFrame {
+            base_tile: 0,
+            palette: 4,
+            dialogue: true,
+        }),
+        ..Window::default()
+    });
+    let [plain, _] = render(&frame, &store);
+    let v = |screen: &ScreenBuffer, x: usize, y: usize| screen.pixel(x, y)[0];
+    let border = |tile: u8| 64 + (tile % 15 + 1);
+    for y in 16..48 {
+        // Two left columns, the fill across exactly width·8 pixels,
+        // then the three right columns and the backdrop.
+        assert_eq!(v(&plain, 0, y), border(6), "row {y}: column +6");
+        assert_eq!(v(&plain, 8, y), border(7), "row {y}: column +7");
+        for x in 16..56 {
+            assert_eq!(v(&plain, x, y), 47, "({x}, {y}): the fill, bank 2");
+        }
+        assert_eq!(v(&plain, 56, y), border(9), "row {y}: column +9 starts at the fill's edge");
+        assert_eq!(v(&plain, 64, y), border(10), "row {y}: column +10");
+        assert_eq!(v(&plain, 72, y), border(11), "row {y}: column +11");
+        assert_eq!(v(&plain, 80, y), 0, "row {y}: nothing past the third column");
+    }
+    for (x, column) in [(0, 0), (8, 1), (16, 2), (48, 2), (56, 3), (64, 4), (72, 5)] {
+        assert_eq!(v(&plain, x, 8), border(column), "top row column {column}");
+        assert_eq!(v(&plain, x, 48), border(12 + column), "bottom row column {column}");
+    }
+
+    // The arrow block: tiles (8..10, 4..6) → pixels (64..80, 32..48).
+    let mut renders = Vec::new();
+    for index in 0..4u8 {
+        frame.main.windows[0].arrow = Some(WindowArrow {
+            base_tile: 0,
+            index,
+        });
+        let [main, _] = render(&frame, &store);
+        let offset = ARROW_TILE_OFFSETS[usize::from(index)];
+        for (pos, (x, y)) in [(64, 32), (72, 32), (64, 40), (72, 40)].into_iter().enumerate() {
+            assert_eq!(
+                v(&main, x, y),
+                border(18 + offset * 4 + pos as u8),
+                "index {index} pos {pos}: tile 18 + {offset}·4 + {pos} at the border's bank"
+            );
+        }
+        // Only those four tiles change: the column above the block
+        // and the +9 column beside it are still border.
+        assert_eq!(v(&main, 64, 24), border(10), "index {index}: +10 above the block");
+        assert_eq!(v(&main, 56, 40), border(9), "index {index}: +9 beside the block");
+        assert_eq!(v(&main, 80, 40), 0, "index {index}: nothing past the block");
+        renders.push(main);
+    }
+    assert_eq!(
+        renders[3].as_rgba(),
+        renders[1].as_rgba(),
+        "index 3 walks back through offset 1: identical to index 1"
+    );
+    assert_ne!(renders[0].as_rgba(), renders[1].as_rgba());
+    assert_ne!(renders[1].as_rgba(), renders[2].as_rgba());
+
+    // The focus icon lands at window x (5-3)·8 = 16 → screen 32..56,
+    // rows 16..48: inside the fill, up to but not over the border.
+    frame.main.windows[0].focus = Some(WindowFocus {
+        asset: focus_gfx,
+        index: 1,
+        scroll: 0,
+    });
+    let [main, _] = render(&frame, &store);
+    let focus_tile = |t: u8| 32 + (t % 15 + 1); // bank 2
+    assert_eq!(v(&main, 31, 16), 47, "left of the icon: the fill");
+    assert_eq!(v(&main, 32, 16), focus_tile(12), "frame 1's tile 0");
+    assert_eq!(v(&main, 55, 47), focus_tile(23), "frame 1's tile 11 ends at the fill's edge");
+    assert_eq!(v(&main, 56, 16), border(9), "the border past the icon is untouched");
+    for (pos, (x, y)) in [(64, 32), (72, 32), (64, 40), (72, 40)].into_iter().enumerate() {
+        assert_eq!(
+            v(&main, x, y),
+            border(18 + ARROW_TILE_OFFSETS[3] * 4 + pos as u8),
+            "the arrow block coexists with the icon"
+        );
+    }
+}
+
+#[test]
+fn blend_brightness_only_changes_the_displayed_target_plane() {
+    let mut store = FixtureStore::new();
+    let (mut frame, _) = window_frame(&mut store);
+    frame.main.blend = Blend {
+        effect: BlendEffect::BrightnessUp,
+        plane1: plane::BG0,
+        evy: 16,
+        ..Blend::default()
+    };
+    let [main, _] = render(&frame, &store);
+    assert_eq!(main.pixel(16, 16), [255; 4]);
+    assert_eq!(main.pixel(0, 0), [0, 0, 0, 255], "untargeted backdrop");
+    frame.main.blend.effect = BlendEffect::BrightnessDown;
+    let [main, _] = render(&frame, &store);
+    assert_eq!(main.pixel(16, 16), [0, 0, 0, 255]);
+}
+
+// ---------------------------------------------------------------------------
+// The field (3D) plane as engine A's BG0
+// ---------------------------------------------------------------------------
+
+mod field_compositing {
+    use super::*;
+    use apricorn_core::field::{
+        FieldScene,
+        model::{Mesh, Texture, Vertex},
+    };
+    use apricorn_gfx::field::tile_position;
+    use std::sync::Arc;
+
+    /// The bedroom's camera preset (ov01 preset 4) as core decodes it;
+    /// the shim renders synthetic scenes with its own indoor constant,
+    /// so this only fills the scene's data field.
+    fn bedroom_camera() -> apricorn_core::field::ov01::CameraPreset {
+        apricorn_core::field::ov01::CameraPreset {
+            distance: 0x0061_B89B,
+            angle: [0xDC82, 0, 0],
+            padding: 0,
+            perspective_type: 1,
+            fovy_angle: 0x0281,
+            near: 0x0009_6000,
+            far: 0x006C_7000,
+            look_at_offset: [0; 3],
+        }
+    }
+
+    /// A synthetic field: one red ground quad, `half` world units to
+    /// each side of the player's tile (0, 0), `alpha` 0–31, and an
+    /// invisible (alpha 0) player texture so the static view's one
+    /// billboard draws nothing.
+    fn field(half: i32, alpha: u8) -> apricorn_core::frame::FieldFrame {
+        apricorn_core::frame::FieldFrame::static_scene(field_scene(half, alpha))
+    }
+
+    fn field_scene(half: i32, alpha: u8) -> Arc<FieldScene> {
+        let centre = tile_position([0, 0]);
+        let h = half * 4096;
+        let corner = |dx: i32, dz: i32| Vertex {
+            position: [centre[0] + dx, 0, centre[2] + dz],
+            uv: [0, 0],
+            color: 0x7FFF,
+        };
+        let (a, b, c, d) = (corner(-h, -h), corner(h, -h), corner(h, h), corner(-h, h));
+        Arc::new(FieldScene::synthetic(
+            0,
+            vec![Mesh {
+                triangles: vec![[a, b, c], [a, c, d]],
+                texture: Some(Arc::new(Texture {
+                    width: 1,
+                    height: 1,
+                    pixels: vec![[255, 0, 0, 255]],
+                })),
+                texture_flags: 0,
+                alpha,
+            }],
+            Texture {
+                width: 1,
+                height: 1,
+                pixels: vec![[0, 0, 0, 0]],
+            },
+            [0, 0],
+            bedroom_camera(),
+        ))
+    }
+
+    /// The field (BG0, enabled) under an opaque gray BG1 (value 5
+    /// everywhere), both at priority 0 until a test says otherwise.
+    fn scene(store: &mut FixtureStore) -> LogicalFrame {
+        let tiles = store.add_tiles(0, &[5u8; 64]);
+        let screen = store.add_screen(8, 8, &[entry(0, false, false, 0)]);
+        let palette = store.add_palette(true, &gray_palette(16));
+        let mut frame = LogicalFrame {
+            main: engine(
+                &[BgLayer::default(), bg_layer(screen)],
+                &[(0, tiles)],
+                palette,
+            ),
+            ..LogicalFrame::default()
+        };
+        frame.main.field = Some(field(100, 31));
+        frame.main.bgs[0].enabled = true;
+        frame
+    }
+
+    #[test]
+    fn the_field_is_bg0_and_sorts_by_priority() {
+        let mut store = FixtureStore::new();
+        let mut frame = scene(&mut store);
+        // BG1 at priority 0 above the field at priority 1.
+        frame.main.bgs[0].priority = 1;
+        frame.main.bgs[1].priority = 0;
+        let [main, _] = render(&frame, &store);
+        assert_eq!(main.pixel(128, 96), [5, 5, 5, 255], "BG1 covers the field");
+        // The field on top: red where the quad lands, BG1 elsewhere.
+        frame.main.bgs[0].priority = 0;
+        frame.main.bgs[1].priority = 1;
+        let [main, _] = render(&frame, &store);
+        assert_eq!(main.pixel(128, 96), [255, 0, 0, 255], "the field shows");
+        assert_eq!(
+            main.pixel(0, 0),
+            [5, 5, 5, 255],
+            "uncovered 3D pixels are transparent"
+        );
+        // A tie goes to the lower BG index — BG0, the field.
+        frame.main.bgs[1].priority = 0;
+        assert_eq!(render(&frame, &store)[0].pixel(128, 96), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn a_disabled_bg0_or_the_hardware_window_hides_the_field() {
+        let mut store = FixtureStore::new();
+        let mut frame = scene(&mut store);
+        frame.main.bgs[1].enabled = false;
+        frame.main.backdrop = 0x7C00; // blue
+        let [main, _] = render(&frame, &store);
+        assert_eq!(main.pixel(128, 96), [255, 0, 0, 255]);
+        assert_eq!(main.pixel(0, 0), [0, 0, 255, 255], "backdrop where clear");
+        frame.main.bgs[0].enabled = false;
+        assert_eq!(render(&frame, &store)[0].pixel(128, 96), [0, 0, 255, 255]);
+        frame.main.bgs[0].enabled = true;
+        frame.main.bgs[0].hidden_rect = Some((120, 90, 136, 102));
+        let [main, _] = render(&frame, &store);
+        assert_eq!(
+            main.pixel(128, 96),
+            [0, 0, 255, 255],
+            "hidden inside the rect"
+        );
+        assert_eq!(main.pixel(140, 96), [255, 0, 0, 255], "shown outside it");
+    }
+
+    #[test]
+    fn sprites_composite_above_the_field_by_priority_and_win_ties() {
+        let mut store = FixtureStore::new();
+        let mut frame = scene(&mut store);
+        frame.main.bgs[1].enabled = false;
+        frame.main.bgs[0].priority = 1;
+        // The OAM fixture: an 8×8 cell whose pixel value is its column
+        // (0 transparent), OBJ palette bank 1, placed so it lands on
+        // the field around (126..134, 92..100).
+        let tiles = store.add_tiles(0, &(0..64).map(|i| (i % 8) as u8).collect::<Vec<_>>());
+        let obj_palette = store.add_palette(true, &gray_palette(32));
+        let mut sprite = store.add_sprite(tiles, obj_palette);
+        sprite.x = 128;
+        sprite.y = 96;
+        frame.main.sprites.push(sprite);
+        let [main, _] = render(&frame, &store);
+        assert_eq!(main.pixel(127, 93), [17, 17, 17, 255], "OBJ over the field");
+        assert_eq!(
+            main.pixel(126, 93),
+            [255, 0, 0, 255],
+            "OBJ value 0 reveals the field"
+        );
+        frame.main.sprites[0].priority = 1;
+        assert_eq!(
+            render(&frame, &store)[0].pixel(127, 93)[0],
+            17,
+            "OBJ wins the tie"
+        );
+        frame.main.bgs[0].priority = 0;
+        assert_eq!(
+            render(&frame, &store)[0].pixel(127, 93),
+            [255, 0, 0, 255],
+            "a higher-priority field hides the OBJ"
+        );
+    }
+
+    #[test]
+    fn master_brightness_and_fades_apply_to_the_field() {
+        let mut store = FixtureStore::new();
+        let mut frame = scene(&mut store);
+        frame.main.bgs[1].enabled = false;
+        frame.main.brightness = MasterBrightness {
+            mode: BrightnessMode::Down,
+            value: 8,
+        };
+        let [main, _] = render(&frame, &store);
+        let down = |c: u32| (c - (c * 8 >> 4)) as u8;
+        assert_eq!(main.pixel(128, 96), [down(255), 0, 0, 255]);
+        // The blend unit's fade on BG0 as a first target (no second
+        // target below), then the master brightness on top of it:
+        // red 255 stays, the other channels rise to 255 · 8/16 = 127,
+        // then all three halve.
+        frame.main.blend = Blend {
+            plane1: plane::BG0,
+            effect: BlendEffect::BrightnessUp,
+            evy: 8,
+            ..Blend::default()
+        };
+        let [main, _] = render(&frame, &store);
+        let up: u32 = 255 * 8 >> 4;
+        assert_eq!(main.pixel(128, 96), [down(255), down(up), down(up), 255]);
+    }
+
+    #[test]
+    fn translucent_field_pixels_blend_with_the_second_target_by_their_alpha() {
+        let mut store = FixtureStore::new();
+        let mut frame = scene(&mut store);
+        frame.main.field = Some(field(100, 15));
+        frame.main.bgs[0].priority = 0;
+        frame.main.bgs[1].priority = 1;
+        // No second target: the pixel shows as is, whatever the mode.
+        let [main, _] = render(&frame, &store);
+        assert_eq!(main.pixel(128, 96), [255, 0, 0, 255]);
+        // BG1 as a second target: ColorBlend5 with eva = 16, evb = 16
+        // and the + 0x10 rounding term, regardless of the effect mode
+        // or first-target mask. The blue channel pins the rounding:
+        // (0 · 16 + 5 · 16 + 16) >> 5 = 3, where an unrounded shift
+        // would give 2.
+        frame.main.blend = Blend {
+            plane2: plane::BG1,
+            ..Blend::default()
+        };
+        let [main, _] = render(&frame, &store);
+        let mix = |a: u32, b: u32| ((a * 16 + b * 16 + 0x10) >> 5) as u8;
+        assert_eq!(mix(0, 5), 3);
+        assert_eq!(
+            main.pixel(128, 96),
+            [mix(255, 5), mix(0, 5), mix(0, 5), 255]
+        );
+        // An opaque field pixel over a second target is unchanged even
+        // under an alpha effect with EVA/EBV set — the 3D plane never
+        // uses the register weights.
+        frame.main.field = Some(field(100, 31));
+        frame.main.blend = Blend {
+            plane1: plane::BG0,
+            effect: BlendEffect::Alpha,
+            plane2: plane::BG1,
+            eva: 8,
+            ebv: 8,
+            evy: 0,
+        };
+        assert_eq!(render(&frame, &store)[0].pixel(128, 96), [255, 0, 0, 255]);
+        // The backdrop completes the search too.
+        frame.main.field = Some(field(100, 15));
+        frame.main.bgs[1].enabled = false;
+        frame.main.backdrop = 0x7C00; // blue
+        frame.main.blend = Blend {
+            plane2: plane::BD,
+            ..Blend::default()
+        };
+        assert_eq!(
+            render(&frame, &store)[0].pixel(128, 96),
+            [mix(255, 0), 0, mix(0, 255), 255]
+        );
+    }
 }

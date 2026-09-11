@@ -21,7 +21,9 @@ pub mod fade;
 pub mod game;
 pub mod intro_copyright;
 pub mod main_menu;
+pub mod naming;
 pub mod oak_speech;
+pub mod start_menu;
 pub mod text;
 pub mod title_screen;
 

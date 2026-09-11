@@ -59,3 +59,12 @@ fn corpus_boot_idle_replays_equivalent() {
     let Some(()) = setup() else { return };
     replay_case("boot-idle");
 }
+
+/// The Phase 4 case: the real ROM driven from power-on to the bedroom
+/// (title → new game → Oak → naming → confirm → fade → map 64); see
+/// `corpus/new-game/README.md` for every milestone frame.
+#[test]
+fn corpus_new_game_replays_equivalent() {
+    let Some(()) = setup() else { return };
+    replay_case("new-game");
+}

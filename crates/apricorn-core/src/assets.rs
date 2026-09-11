@@ -28,9 +28,9 @@ use std::path::Path;
 
 use crate::cache;
 use crate::font::Font;
-use crate::formats::{MsgBank, Narc, Ncgr, Nclr, Nscr};
+use crate::formats::{MsgBank, Nanr, Narc, Ncer, Ncgr, Nclr, Nscr};
 use crate::frame::AssetId;
-use crate::nds::{NdsError, NdsRom, lz10};
+use crate::nds::{NdsError, NdsRom, Overlay, blz, lz10};
 
 /// The copyright beat's assets — pret `src/intro_movie_scene_1.c`,
 /// `IntroMovie_Scene1_LoadBgGfx` (HeartGold arm), members of
@@ -182,6 +182,8 @@ pub mod frame_narc {
     /// Frame id 0's tiles through `LoadUserFrameGfx2` — member
     /// frame + 2 (`sub_0200E63C`).
     pub const GFX2_FRAME0_CHAR: usize = 2;
+    /// Three 16x16 down-arrow poses (`sub_0200EB68`, member 0x16).
+    pub const DOWN_ARROW_CHAR: usize = 0x16;
     /// The frames' 16-color palette (`LoadUserFrameGfx1`, frame
     /// id 2 uses member 0x2E).
     pub const PALETTE: usize = 0x19;
@@ -282,6 +284,99 @@ pub mod yesno_narc {
     pub const SCREEN: usize = 10;
 }
 
+/// The field start menu's graphics — members of `NARC_a_0_1_4`
+/// (`a/0/1/4`, 78 members: the field's sub-screen UI archive).
+///
+/// The top-screen part is pret `src/start_menu.c`:
+/// `Task_StartMenu_DrawCursor` (`:455-472`) loads the bar into MAIN
+/// BG3 and `StartMenu_CreateCursor` (`:665-705`) builds the bobbing
+/// cursor sprite. The sub-screen grid is overlay 27
+/// (`asm/overlay_27.s` — asm, so the ROM is the spec): the BG loads
+/// in `ov27_0225AC00` (`:1561`, members from the
+/// `ov27_0225CEEC/CEF0/CEF4` tables, `:5989-5996`), the sprite
+/// resources in `ov27_0225AD0C`/`ov27_0225AEA8` (`:1687`/`:1886`,
+/// char members from `ov27_0225CF94`, `:6023-6036`).
+pub mod start_menu {
+    /// The archive in NitroFS (`a/0/1/4`).
+    pub const NARC: &str = "a/0/1/4";
+
+    /// MAIN BG3's char: the top-screen bar (`start_menu.c:465`,
+    /// member 12, LZ).
+    pub const TOP_BAR_CHAR: usize = 12;
+    /// MAIN BG3's screen (`:467`, member 13, LZ): rows 17–23 of a
+    /// 32×24 map, the right half mirrored.
+    pub const TOP_BAR_SCREEN: usize = 13;
+    /// The bar's 16-color palette (`:466`, member 15) → MAIN BG
+    /// palette byte offset `0x1C0`, `0x20` bytes.
+    pub const TOP_BAR_PALETTE: usize = 15;
+    /// The bar's palette bank — `0x1C0 / 0x20`.
+    pub const TOP_BAR_BANK: u8 = 14;
+
+    /// The top-screen cursor's OBJ palette (`:669`, member 61).
+    pub const CURSOR_PALETTE: usize = 61;
+    /// The cursor's NCER (`:670`, member 62, LZ) — one 32×32 cell.
+    pub const CURSOR_CELLS: usize = 62;
+    /// The cursor's NANR (`:671`, member 63, LZ) — one two-frame
+    /// translate loop (22 frames at y 0, 22 at y +4).
+    pub const CURSOR_ANIM: usize = 63;
+    /// The cursor's NCGR (`:668`, member 64, LZ).
+    pub const CURSOR_CHAR: usize = 64;
+
+    /// SUB BG0's char (`ov27_0225CEF0[layout]`, member 8, LZ) — the
+    /// menu panel; every layout row names the same member.
+    pub const SUB_BG_CHAR: usize = 8;
+    /// SUB BG0's screen (`ov27_0225CEF4[layout]`, member 9, LZ).
+    pub const SUB_BG_SCREEN: usize = 9;
+    /// The sub-screen BG palette (`ov27_0225CEEC[layout]`, member 7)
+    /// — a full `0x200`-byte load; bank 4 is the label font's.
+    pub const SUB_BG_PALETTE: usize = 7;
+
+    /// The icon sprites' NCER (`ov27_0225AD0C`, resource id `0x64`,
+    /// member 16, LZ): ten cells — a 32×32 body plus an 8×32 strip.
+    pub const ICON_CELLS: usize = 16;
+    /// The icon sprites' NANR (member 17, LZ): seven sequences —
+    /// 0 idle, 1 left/right bounce, 2 pressed, 3 up/down bounce,
+    /// 4 the pop-in scale, 5 the wobble, 6 the bare body.
+    pub const ICON_ANIM: usize = 17;
+    /// The icon OBJ palette (`ov27_0225AEA8`'s default pltt member,
+    /// `:1899`, member 14): two banks, normal then highlighted —
+    /// `ov27_0225B398` (`:2474`) loads the second over the selected
+    /// slot's bank.
+    pub const ICON_PALETTE: usize = 14;
+    /// The icon chars by resource index (`ov27_0225CF94[i].char`,
+    /// `:6023-6036`): POKéDEX 18, POKéMON 21, BAG 24, POKéGEAR 30,
+    /// TRAINER CARD 33, SAVE 36, OPTIONS 39, RETIRE 42, CHAT 45,
+    /// LOG 48.
+    pub const ICON_CHARS: [usize; 13] = [18, 21, 24, 30, 33, 36, 39, 42, 18, 18, usize::MAX, 45, 48];
+    /// The female player's BAG char (`ov27_0225AEA8`'s gender
+    /// branch, `:1918-1922`, member 27).
+    pub const BAG_FEMALE_CHAR: usize = 27;
+
+    /// The multi-purpose button sheet's NCGR (`ov27_0225AEA8` slot 9,
+    /// `:1963-1969`, member 70, LZ): the registered-item, running
+    /// shoes, A-button, and `(X) MENU` glyphs.
+    pub const SHEET_CHAR: usize = 70;
+    /// The sheet's NCER (resource id `0x65`, member 68, LZ) — 14 cells.
+    pub const SHEET_CELLS: usize = 68;
+    /// The sheet's NANR (member 69, LZ) — 13 sequences; 12 is the
+    /// `(X)` glyph beside the MENU header.
+    pub const SHEET_ANIM: usize = 69;
+    /// The sheet's OBJ palettes — member 7 again, four banks
+    /// (`:1966`, `AddPlttResObjFromNarc(…, 7, …, 4, …)`).
+    pub const SHEET_PALETTE: usize = 7;
+
+    /// The registered-item buttons' NCER/NANR (resource id `0x66`,
+    /// members 54/55, LZ) — closed-state UI, listed for fidelity.
+    pub const REGISTERED_ITEM_CELLS: usize = 54;
+    /// See [`REGISTERED_ITEM_CELLS`].
+    pub const REGISTERED_ITEM_ANIM: usize = 55;
+
+    /// `NARC_msg_msg_0196_bin` — the menu's message bank
+    /// (`ov27_02259F80`, `NewMsgDataFromNarc(0, 0x1B, 0xC4, 8)`,
+    /// `:96`).
+    pub const MSG_BANK: usize = 196;
+}
+
 /// Failures while opening the dump or loading an asset.
 #[derive(Debug)]
 pub enum AssetsError {
@@ -345,6 +440,10 @@ enum Asset {
     Font(Font),
     /// A decoded message bank (a Text chunk).
     Text(cache::Text),
+    /// Sprite cell geometry.
+    Cells(cache::Cells),
+    /// Sprite animation sequences.
+    Animation(cache::Animation),
 }
 
 /// The boot scenes' asset source: a parsed retail dump plus the assets
@@ -364,6 +463,116 @@ pub struct AssetStore {
 }
 
 impl AssetStore {
+    /// Expanded executable data for ROM-resident lookup tables. The store's
+    /// SHA-1 gate ensures that callers' retail addresses match this image.
+    pub fn arm9_image(&self) -> Result<Vec<u8>, AssetsError> {
+        let decode = || -> Result<Vec<u8>, NdsError> {
+            Ok(NdsRom::parse(&self.rom)?.arm9_image()?.into_owned())
+        };
+        decode().map_err(|source| AssetsError::Corrupt {
+            what: "ARM9 lookup tables".into(),
+            source,
+        })
+    }
+    /// RAM address the ARM9 image loads to (0x02000000 on HeartGold) —
+    /// the base that pinned table addresses such as
+    /// [`crate::field::map_header::MAP_HEADERS_ADDRESS`] are relative to.
+    pub fn arm9_base(&self) -> u32 {
+        // `open` validated the header, so re-parsing cannot fail.
+        NdsRom::parse(&self.rom).map_or(0x0200_0000, |rom| rom.header.arm9.ram_address)
+    }
+    /// Loads the default dialogue frame and builds its down-arrow tiles.
+    ///
+    /// `sub_0200EA68` repeats frame tiles 10/11 under each 16x16 pose,
+    /// then blits member 22 with source X=3, width=13 and color key 0.
+    /// The three resulting poses occupy tiles 18..30 after the border.
+    ///
+    /// # Errors
+    /// Returns an error if either ROM member is missing or malformed.
+    pub fn load_default_dialogue_frame(&mut self) -> Result<AssetId, AssetsError> {
+        let narc = frame_narc::NARC;
+        let bytes = self.member(narc, frame_narc::GFX2_FRAME0_CHAR)?;
+        let mut border = decode_tiles(&bytes, narc, frame_narc::GFX2_FRAME0_CHAR)?;
+        let bytes = self.member(narc, frame_narc::DOWN_ARROW_CHAR)?;
+        let arrow = decode_tiles(&bytes, narc, frame_narc::DOWN_ARROW_CHAR)?;
+        if !border.is_4bpp()
+            || border.tile_count() != 18
+            || !arrow.is_4bpp()
+            || arrow.tile_count() < 12
+        {
+            return Err(AssetsError::Corrupt {
+                what: "default dialogue frame / down arrow".to_owned(),
+                source: NdsError::Invalid {
+                    what: "expected 18 border tiles and three 16x16 arrow poses",
+                },
+            });
+        }
+        let mut poses = vec![0; 12 * 64];
+        for y in 0..48 {
+            for x in 0..16 {
+                let at = ((y / 8) * 2 + x / 8) * 64 + (y % 8) * 8 + x % 8;
+                let background = border.pixels()[(10 + x / 8) * 64 + (y % 8) * 8 + x % 8];
+                let ink = if x < 13 {
+                    let source_x = x + 3;
+                    arrow.pixels()[((y / 8) * 2 + source_x / 8) * 64 + (y % 8) * 8 + source_x % 8]
+                } else {
+                    0
+                };
+                poses[at] = if ink == 0 { background } else { ink };
+            }
+        }
+        border.append_tiles(&poses);
+        Ok(self.push(Asset::Tiles(border)))
+    }
+
+    /// Loads a sprite's NCER cell bank from the ROM.
+    ///
+    /// # Errors
+    /// Returns an error for missing or malformed cell data.
+    pub fn load_cells(&mut self, narc: &str, member: usize) -> Result<AssetId, AssetsError> {
+        let bytes = self.member(narc, member)?;
+        let cells = Ncer::parse(&bytes)
+            .and_then(|data| cache::Cells::parse(&cache::encode_cells(&data)))
+            .map_err(|source| AssetsError::Corrupt {
+                what: format!("{narc}#{member}"),
+                source,
+            })?;
+        Ok(self.push(Asset::Cells(cells)))
+    }
+
+    /// Loads a sprite's NANR animation bank from the ROM.
+    ///
+    /// # Errors
+    /// Returns an error for missing or malformed animation data.
+    pub fn load_animation(&mut self, narc: &str, member: usize) -> Result<AssetId, AssetsError> {
+        let bytes = self.member(narc, member)?;
+        let animation = Nanr::parse(&bytes)
+            .and_then(|data| cache::encode_animation(&data))
+            .and_then(|data| cache::Animation::parse(&data))
+            .map_err(|source| AssetsError::Corrupt {
+                what: format!("{narc}#{member}"),
+                source,
+            })?;
+        Ok(self.push(Asset::Animation(animation)))
+    }
+
+    /// Resolves a sprite cell bank.
+    #[must_use]
+    pub fn cells(&self, id: AssetId) -> Option<&cache::Cells> {
+        match self.assets.get(id.index()) {
+            Some(Asset::Cells(cells)) => Some(cells),
+            _ => None,
+        }
+    }
+
+    /// Resolves a sprite animation bank.
+    #[must_use]
+    pub fn animation(&self, id: AssetId) -> Option<&cache::Animation> {
+        match self.assets.get(id.index()) {
+            Some(Asset::Animation(animation)) => Some(animation),
+            _ => None,
+        }
+    }
     /// The SHA-1 of the retail dump the asset tables are pinned to
     /// (HeartGold US) — the same constant `apicorn-harness` traces and
     /// `apicorn-tools verify` carry.
@@ -453,7 +662,11 @@ impl AssetStore {
     /// # Errors
     /// Returns an [`AssetsError`] when the path or member is missing or
     /// the member is not a parseable MAT bank.
-    pub fn load_msg_bank(&mut self, narc_path: &str, member: usize) -> Result<AssetId, AssetsError> {
+    pub fn load_msg_bank(
+        &mut self,
+        narc_path: &str,
+        member: usize,
+    ) -> Result<AssetId, AssetsError> {
         let bytes = self.member(narc_path, member)?;
         let bank = MsgBank::parse(&bytes).map_err(|source| AssetsError::Corrupt {
             what: format!("{narc_path}#{member}"),
@@ -554,7 +767,11 @@ impl AssetStore {
     ///
     /// # Errors
     /// Returns an [`AssetsError`] when the path or member is missing.
-    fn member(&self, narc_path: &str, member: usize) -> Result<Cow<'_, [u8]>, AssetsError> {
+    pub(crate) fn member(
+        &self,
+        narc_path: &str,
+        member: usize,
+    ) -> Result<Cow<'_, [u8]>, AssetsError> {
         let rom = NdsRom::parse(&self.rom).map_err(|source| AssetsError::Corrupt {
             what: "ROM".to_owned(),
             source,
@@ -566,17 +783,81 @@ impl AssetStore {
             what: narc_path.to_owned(),
             source,
         })?;
-        let raw = narc
-            .file(member)
-            .map_err(|_| AssetsError::Missing(format!("{narc_path} has no member {member}")))?;
-        if lz10::is_lz10(raw) {
-            match lz10::decompress(raw) {
-                Ok(image) if !image.is_empty() => Ok(Cow::Owned(image)),
-                _ => Ok(Cow::Borrowed(raw)),
-            }
+        narc_member(&narc, narc_path, member)
+    }
+
+    /// Parses the NitroFS archive at `narc_path` once so a caller that
+    /// walks many members (the field loader reads hundreds of land and
+    /// prop members per map) pays the container parse a single time.
+    /// Read members through [`narc_member`].
+    ///
+    /// # Errors
+    /// Returns an [`AssetsError`] when the path is missing or the file is
+    /// not a NARC.
+    pub fn narc(&self, narc_path: &str) -> Result<Narc<'_>, AssetsError> {
+        let bytes = self.nitrofs_file(narc_path)?;
+        Narc::parse(bytes).map_err(|source| AssetsError::Corrupt {
+            what: narc_path.to_owned(),
+            source,
+        })
+    }
+
+    /// The number of members in the NitroFS archive at `narc_path` — the
+    /// bound a map header's bank fields must respect.
+    ///
+    /// # Errors
+    /// Returns an [`AssetsError`] when the path is missing or the file is
+    /// not a NARC.
+    pub fn member_count(&self, narc_path: &str) -> Result<usize, AssetsError> {
+        Ok(self.narc(narc_path)?.file_count())
+    }
+
+    /// The raw bytes of the NitroFS file at `path` (a loose file such as
+    /// `fielddata/maptable/mapname.bin`, or a whole archive).
+    ///
+    /// # Errors
+    /// Returns [`AssetsError::Missing`] when no file has that path.
+    pub fn nitrofs_file(&self, path: &str) -> Result<&[u8], AssetsError> {
+        let rom = NdsRom::parse(&self.rom).map_err(|source| AssetsError::Corrupt {
+            what: "ROM".to_owned(),
+            source,
+        })?;
+        rom.file_by_path(path)
+            .map_err(|_| AssetsError::Missing(format!("no NitroFS file {path}")))
+    }
+
+    /// An ARM9 overlay as it sits in RAM after loading: the overlay-table
+    /// entry (for its load address) and its bytes, BLZ-decompressed when
+    /// the table marks it compressed (retail HeartGold compresses every
+    /// overlay but 35 and 124 — see [`crate::nds::blz`]). The `.bss`
+    /// tail is not appended; callers read `.text`/`.rodata` tables only.
+    ///
+    /// # Errors
+    /// Returns [`AssetsError::Missing`] when the overlay table has no
+    /// entry `id`, or [`AssetsError::Corrupt`] when its payload fails
+    /// BLZ validation.
+    pub fn overlay(&self, id: u32) -> Result<(Overlay, Vec<u8>), AssetsError> {
+        let rom = NdsRom::parse(&self.rom).map_err(|source| AssetsError::Corrupt {
+            what: "ROM".to_owned(),
+            source,
+        })?;
+        let entry = rom
+            .overlays()
+            .iter()
+            .find(|o| o.id == id)
+            .copied()
+            .ok_or_else(|| AssetsError::Missing(format!("no ARM9 overlay {id}")))?;
+        let corrupt = |source| AssetsError::Corrupt {
+            what: format!("ARM9 overlay {id}"),
+            source,
+        };
+        let stored = rom.file(entry.fat_id).map_err(corrupt)?;
+        let image = if entry.is_compressed() {
+            blz::decompress(stored, entry.raw_size as usize).map_err(corrupt)?
         } else {
-            Ok(Cow::Borrowed(raw))
-        }
+            stored.to_vec()
+        };
+        Ok((entry, image))
     }
 
     /// Stores `asset`, returning its handle.
@@ -584,6 +865,32 @@ impl AssetStore {
         let id = AssetId::from_index(self.assets.len());
         self.assets.push(asset);
         id
+    }
+}
+
+/// Member `member` of an already-parsed `narc` (see [`AssetStore::narc`]),
+/// expanded exactly as [`AssetStore::member`] would: LZ77-10 sniffed on
+/// the `0x10` magic byte, with a failed or empty expansion handing back
+/// the raw bytes (see that method's notes on the sniff's false
+/// positives). `narc_path` only names the archive in errors.
+///
+/// # Errors
+/// Returns [`AssetsError::Missing`] when the archive has no such member.
+pub fn narc_member<'a>(
+    narc: &Narc<'a>,
+    narc_path: &str,
+    member: usize,
+) -> Result<Cow<'a, [u8]>, AssetsError> {
+    let raw = narc
+        .file(member)
+        .map_err(|_| AssetsError::Missing(format!("{narc_path} has no member {member}")))?;
+    if lz10::is_lz10(raw) {
+        match lz10::decompress(raw) {
+            Ok(image) if !image.is_empty() => Ok(Cow::Owned(image)),
+            _ => Ok(Cow::Borrowed(raw)),
+        }
+    } else {
+        Ok(Cow::Borrowed(raw))
     }
 }
 

@@ -58,11 +58,11 @@ use crate::app::fade::{BrightnessFade, FadeColor, FadeType};
 use crate::app::text::{TextFlags, TextPrinter, font_color};
 use crate::app::{App, ChainNext};
 use crate::assets::{AssetStore, AssetsError, font_narc, frame_narc, msg_narc};
-use crate::frame::{
-    AssetId, BgLayer, ColorMode, DisplaySelect, LogicalFrame, PaletteLoad, ScreenSize, TilePlacement,
-    Window, WindowFrame,
-};
 use crate::font::Font;
+use crate::frame::{
+    AssetId, BgLayer, ColorMode, DisplaySelect, LogicalFrame, PaletteLoad, ScreenSize,
+    TilePlacement, Window, WindowFrame,
+};
 use crate::input::{Input, Keys, key};
 use crate::text::string::GameString;
 
@@ -235,7 +235,7 @@ impl CheckSave {
             .expect("the asset store is only locked at app construction");
         // The graphics the SETUP pass draws from: both frames and
         // their palettes, the font, the message bank.
-        let gfx2_tiles = store.load_tiles(frame_narc::NARC, frame_narc::GFX2_FRAME0_CHAR)?;
+        let gfx2_tiles = store.load_default_dialogue_frame()?;
         let gfx1_tiles = store.load_tiles(frame_narc::NARC, frame_narc::FRAME0_CHAR)?;
         let gfx2_pal = store.load_palette(frame_narc::NARC, frame_narc::GFX2_FRAME0_PALETTE)?;
         let gfx1_pal = store.load_palette(frame_narc::NARC, frame_narc::PALETTE)?;
@@ -307,6 +307,7 @@ impl CheckSave {
         // The template's layer: 4bpp 256x256 at char block 3,
         // priority 1, the cleared tilemap (BgClearTilemapBufferAndCommit).
         self.frame.main.bgs[usize::from(WINDOW_BG)] = BgLayer {
+            hidden_rect: None,
             enabled: true,
             char_base: BG_CHAR_BLOCK,
             screen: None,
@@ -318,16 +319,14 @@ impl CheckSave {
         };
         // LoadUserFrameGfx2/1's char data, into the layer's block at
         // the template tiles.
-        self.frame.main.char_blocks[usize::from(BG_CHAR_BLOCK)]
-            .push(TilePlacement {
-                asset: self.gfx2_tiles,
-                tile: GFX2_TILE,
-            });
-        self.frame.main.char_blocks[usize::from(BG_CHAR_BLOCK)]
-            .push(TilePlacement {
-                asset: self.gfx1_tiles,
-                tile: GFX1_TILE,
-            });
+        self.frame.main.char_blocks[usize::from(BG_CHAR_BLOCK)].push(TilePlacement {
+            asset: self.gfx2_tiles,
+            tile: GFX2_TILE,
+        });
+        self.frame.main.char_blocks[usize::from(BG_CHAR_BLOCK)].push(TilePlacement {
+            asset: self.gfx1_tiles,
+            tile: GFX1_TILE,
+        });
         // The three palette loads, pret's order: Gfx2's NCLR (member
         // 0x1A) into bank 2, Gfx1's into bank 3, the font's into
         // bank 1.
@@ -360,6 +359,7 @@ impl CheckSave {
             base_tile: WINDOW_BASE_TILE,
             fill: WINDOW_FILL,
             glyphs: Vec::new(),
+            fills: Vec::new(),
             scroll: 0,
             frame: None,
             arrow: None,
@@ -414,7 +414,8 @@ impl CheckSave {
                 // shows step 1.
                 self.frame.main.backdrop = FADE_IN_BACKDROP;
                 self.frame.sub.backdrop = FADE_IN_BACKDROP;
-                self.fade.begin(FadeType::BrightnessIn, FadeColor::Black, 6, 1);
+                self.fade
+                    .begin(FadeType::BrightnessIn, FadeColor::Black, 6, 1);
                 self.main_state = MainState::WaitForFadeIn;
                 false
             }
@@ -428,7 +429,8 @@ impl CheckSave {
                 if self.print_message(input, new_keys, touch_new) {
                     // The same tick the print finished: the 6x1
                     // brightness-out.
-                    self.fade.begin(FadeType::BrightnessOut, FadeColor::Black, 6, 1);
+                    self.fade
+                        .begin(FadeType::BrightnessOut, FadeColor::Black, 6, 1);
                     self.main_state = MainState::WaitForFadeOut;
                 }
                 false
@@ -458,6 +460,7 @@ impl CheckSave {
                     window.frame = Some(WindowFrame {
                         base_tile: GFX2_TILE,
                         palette: 2,
+                        dialogue: true,
                     });
                 }
                 let units = self.messages[self.msg_num].clone();
@@ -470,7 +473,7 @@ impl CheckSave {
                     0,
                     font_color(1),
                     TEXT_SPEED,
-                    0,
+                    GFX2_TILE,
                 ));
                 // The construction-frame print: the sys task runs
                 // after this exec, so the first glyph lands now.

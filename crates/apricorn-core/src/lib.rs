@@ -16,6 +16,7 @@ pub mod app;
 pub mod assets;
 pub mod cache;
 pub mod data;
+pub mod field;
 pub mod font;
 pub mod formats;
 pub mod frame;
@@ -24,6 +25,7 @@ pub mod nds;
 pub mod rng;
 pub mod rtc;
 pub mod save;
+pub mod script;
 pub mod text;
 
 /// Semantic version of the engine's state-machine / trace format.

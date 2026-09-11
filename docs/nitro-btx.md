@@ -18,7 +18,7 @@ parses every BTX in the ROM):
 | Texture entries | 14,735 |
 | Palette entries | 7,729 |
 | PLTT16 (4bpp) textures | 12,794 |
-| PLTT4 (4-color) textures | 1,617 |
+| PLTT4 (2bpp, 4-color) textures | 1,617 |
 | A5I3 textures | 169 |
 | A3I5 textures | 145 |
 | PLTT256 (8bpp) textures | 10 |
@@ -140,26 +140,17 @@ of unknown meaning (GBATEK: "usually 0, sometimes 1") — 0 on 6,117
 retail entries, 1 on 1,612, always one of the two. It is exposed raw by
 the parser and not validated.
 
-## The two deliberate non-validations
+## Texture spans and palette sizes
 
-Everything above is enforced at parse time except two empirically-justified
-gaps:
+Texture offsets and span ends are both validated. PLTT4 means four colors
+at **2 bits per pixel**; all 14,735 texture spans fit their data areas.
+The earlier report of 51 truncated shadow textures was a parser error
+that treated PLTT4 as 4bpp. The bedroom renderer exposed and corrected it.
 
-1. **Span ends are not validated.** Texture *offsets* must land inside
-   the texture data and the first texture must start at offset 0, but in
-   45 of 1,157 files the last entry's declared span overruns
-   `sizeTex·8` by 64–1,024 bytes (51 entries in total, mostly dummy
-   `*_kage` "shadow" textures whose available bytes are all zero). The
-   packer wrote headers for textures it never stored in full; the G3D
-   engine only copies `sizeTex·8` bytes to VRAM and the zero tail renders
-   transparent. `BtxTexture::data` therefore clamps to the end of the
-   texture-data area rather than trusting the declared size
-   (`BtxTexture::declared_size` exposes it).
-2. **Per-palette sizes are not stored in the file**, so palette entries
-   are bounds-checked only (`offset < sizePltt·8`): 61 retail files
-   carry 16-byte palette data with a single base-0 entry. A 16-color
-   palette occupies 32 bytes, a 4-color one 16 — the size is derived
-   from the texture format and the USEPLTT4 flag at draw time.
+Per-palette sizes are not stored in the file, so entries expose the data
+from their base to the next distinct base. Four colors need 8 bytes and
+16 colors need 32 bytes; archive padding can make a slice larger. Texture
+materials bind the palette used for decoding.
 
 ## Where BTX files live
 

@@ -129,6 +129,7 @@ impl IntroCopyright {
         // share slot 2; SUB BG0/BG1 share slot 1 (the logo cover reads
         // the logo's tiles), SUB BG3 owns slot 4.
         let layer = |char_base: u8, screen, priority: u8| BgLayer {
+            hidden_rect: None,
             enabled: false,
             char_base,
             screen,

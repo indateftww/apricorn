@@ -191,8 +191,9 @@ pins the same pixels by SHA-1 (details: `docs/gfx.md`).
       round-trip + status-matrix tests on synthesized retail-shaped
       blobs plus a retail `hg.sav` gate (`tests/save.rs`),
       `docs/save.md`
-- [ ] Game-state machine: boot → title → new game → Oak intro → name entry.
-      One commit at the end; the port order, one scene at a time:
+- [x] Game-state machine: boot → title → new game → Oak intro → name entry.
+      Functional milestone accepted after user regression testing on
+      2026-09-11. Exact parity follow-ups are tracked in Phase 8.
       - [x] Pinned RTC clock (`GF_InitRTCWork` — the deterministic
             time Oak's greeting and `InitializeMainRNG` read).
             → `apricorn-core::rtc`
@@ -216,30 +217,204 @@ pins the same pixels by SHA-1 (details: `docs/gfx.md`).
             menu, control/adventure info screens, the time-of-day
             greeting, the Oak-pic slide, the gender pick, the naming
             handoff, the shrink anim. → `apricorn-core::app::oak_speech`
-      - [ ] Naming screen (`src/naming_screen.c`): the on-screen
+      - [x] Naming screen (`src/naming_screen.c`): the on-screen
             keyboard name entry Oak launches (nested overlay).
-            → `apricorn-core::app::naming`
-      - [ ] Landing: desktop presenter wired from `boot_chain` to
-            `Game`, docs page, machine-walk tests re-pinned through
-            Oak/naming, this checkbox pass, the step's single commit.
+            → `apricorn-core::app::naming`: ROM-loaded uppercase/lowercase/
+            symbol pages, pad/touch input, deletion and seven-character
+            limit, page slides, default-name RNG selection; confirmed
+            identity retained by `Game`. `tests/naming_hg.rs` in core/gfx.
+      - [x] Landing: desktop runs `Game` with mouse-to-stylus input,
+            `docs/game-flow.md`, machine-walk tests through real Oak/name
+            entry (no injected result), and renderer regressions for OBJ
+            palettes, transparent text blits and the name-box window mask.
+      - [x] Naming's palette glow, bar wiggle and BACK/OK press effects;
+            ROM animation/palette data with behavior regressions.
+      - [x] Structured new-game and post-Oak save initialization:
+            all 42 block defaults, money/position/flags, trainer ID/avatar,
+            Safari areas, friend mail and Pokewalker seeds. Defaults are
+            checked against original ARM initializers under fixed external
+            inputs; post-Oak RNG order and card round trips are tested.
+            → `save::new_game`, core/harness `tests/new_game_hg.rs`.
+      - [x] Rendered bedroom landing: map 64's real land model, eight
+            furniture placements, textures and the chosen player character.
+            → `core::field`, `gfx::field`, `tests/bedroom_hg.rs`.
+      - [x] User regression playtest and Phase 4 acceptance before commit.
+            Oak's missing Poké Ball corrected and its render verified;
+            save validation covered by automated tests.
 
 **Exit:** new-game flow up to landing in the player's bedroom; original `.sav`
 files load and save back byte-identically.
+— Flow initializes the new save state and reaches a rendered static bedroom
+with the confirmed name/gender. Movement, room scripts and field menus are
+Phase 5. Phase 4's functional milestone is accepted; this is not a claim of
+full original-scene equivalence. Retail save-container round trips pass,
+and exact parity follow-ups remain explicit in Phase 8.
 
 ---
 
 ## Phase 5 — Overworld
 
+Parallel workstreams (2026-09-11 →): each lands as its own reviewed
+branch with ROM-gated tests, then the orchestrator wires them into
+`app::game`. Sub-items are checked when merged, not when started.
+
+**Status 2026-09-11 (afternoon) — checkpoint for the user's regression
+test.** Merged and green (all suites, ROM-gated ones included): the field
+data layer, 3D field rendering, the movement machine, the script VM core,
+the start menu, the day/night model, the engine runner, the oracle
+screenshots, and now the **live field system**: the new-game flow lands
+in a walkable bedroom, the stairs warp to the house's ground floor, the
+door warps to New Bark Town, the player stands on the BDHC ground height
+and the camera follows. Visual checks against retail frames: bedroom and
+house 1F match pixel-for-pixel on the player; New Bark's framing matches
+after the height fix. Not yet in this checkpoint: NPCs (Mom's room is
+empty, no scripted scene), dialogue/script host, the bag/party menus and
+the touch bottom screen (black), lighting applied to the renderer,
+bicycle/ledges/surf, the windmill prop's blade layer (decodes as a
+plane), and any map beyond New Bark Town's neighbours. The text-box
+"defects" seen in engine screenshots were measured against retail and
+are retail behavior (pinned by tests).
+
+How to regression test this checkpoint (from this branch):
+`cargo run -p apricorn-desktop -- --rom hg_usa.nds` — play through the
+new game, then walk (arrows) around the bedroom, down the stairs, out
+the front door and around New Bark Town. Headless equivalents:
+`apricorn-run --rom hg_usa.nds --input scripts/engine-walk.apin --png 3010,3153,3290 --out out/walk`
+and the retail ground truth `scripts/shots.ps1 corpus/new-game "4816"`.
+
+Picking this up later:
+
+- Phase 5 work was done on branch `claude/game-development-progress-fda06c`
+  and is being merged into `main` by the user; continue from `main`.
+- Worktree setup for a fresh checkout (the inputs are gitignored): copy
+  or hardlink `hg_usa.nds` and `hg.sav` into the checkout root, clone
+  `refs/pokeheartgold` and `refs/melonds`, build the oracle with
+  `oracle/setup.ps1`. Cargo needs MinGW on `PATH` on Windows
+  (`C:/msys64/mingw64/bin`) for the GNU toolchain's `dlltool`.
+- Next objective in order: NPC objects + the script host (Mom's scene,
+  dialogue boxes, init scripts on map load), then the start-menu and
+  lighting hookups, the touch bottom screen, bag/party screens, then
+  the user's Phase 5 regression test and acceptance.
+- Per-subsystem notes: `docs/field-system.md`, `docs/field-data.md`,
+  `docs/field-movement.md`, `docs/script-vm.md`, `docs/menus.md`,
+  `docs/day-night.md`, `docs/engine-runner.md`, `docs/oracle.md`,
+  `corpus/new-game/README.md` (retail frame-by-frame milestones).
+
+**What is left for Phase 5** (consolidated, in the order to do it):
+
+1. **NPC objects + script host** — `MapObjectManager` from each map's
+   `ObjectEvent`s (sprites via the ov01 sprite→model table, walk cycles
+   like the player's), the NPC movement types (look-around/wander draw
+   from the LCRNG, so port them from the asm with arm-runner checks),
+   A-button interaction radius and facing, the field `ScriptHost`
+   (dialogue box on the top LCD via `TextPrinter`, yes/no, `ApplyMovement`/
+   `WaitMovement`, `Warp`, fades, player lock), init scripts on map load
+   (`ON_TRANSITION`/`ON_RESUME`/`ON_LOAD`/frame table), BG-event signs and
+   coordinate triggers. Milestone: Mom's scripted scene in the house runs
+   and every sign in New Bark Town talks.
+2. **Field hookups** — the start menu opened from the field (X/START),
+   the touch bottom screen (today black), the area-light template applied
+   to the 3D renderer per time of day, the location-name popup on map
+   entry, day/night music ids exposed for Phase 7.
+3. **Map coverage** — streaming beyond the 3 × 3 cell window as the
+   player moves, the remaining warp kinds (escalators, ladders, warp
+   panels, `0x100` dynamic anchors), the elevation collision rule
+   (`sub_02054954`), Route 29 → Cherrygrove → Route 30 walkable with
+   their events.
+4. **Movement slices** — running shoes/B-run, ledges/jumps, bicycle,
+   surf (behaviour flags and step machine already carry the seams).
+5. **Menus** — bag and party screens with their touch versions, the
+   unselected-icon OAM dimming in the start menu.
+6. **Known fidelity gaps** — the windmill prop's blade layer (bm_field
+   member 28) decodes as a flat plane; the door-out transition schedule
+   is assumed from the stairs measurement; the engine seeds at
+   construction while retail seeds at VBlank 185 (Phase 8 parity item).
+7. **Phase 5 exit** — an oracle replay of a New Bark/Route 29 walk with
+   NPC RNG draws compared by trace, then the user's regression test and
+   acceptance.
+
+Phases 6–9 keep their own checklists below.
+
 - [ ] Map engine: HGSS's map/BG layers, collision, warp/door transitions,
       camera.
+      - [x] Field data layer: map headers (ARM9 table, pinned), matrices,
+            land data (attributes/props/model/BDHC/extra), area data,
+            terrain attributes + collision bits, map events, script
+            headers, overlay-1 tables (camera presets, sprite→model).
+            → `apricorn-core::field::{map_header,matrix,land,area,terrain,
+            events,script_header,ov01}`, `docs/field-data.md`
+      - [x] Field rendering: the 3D field composited as engine A's BG0
+            under the 2D layers/OBJ/windows, camera presets (perspective
+            and orthographic, SDK fixed-point angles), prop transforms,
+            map-object billboards with the original projection shear.
+            → `apricorn-gfx::field`, `docs/gfx.md`
+      - [x] Field system integration: the live per-frame field in
+            `app::game` (`GameState::Field`), stairs/door warps with the
+            oracle-measured transition schedule, the camera follow, the
+            animated player billboard from the hero's NSBTX, the BDHC
+            plate-height solver (`field::height`, port of
+            `ov01_021FAE50`), the 3 × 3 cell window, the land-data
+            section-order fix (extra section precedes the attributes)
+            and the behaviour-flags table for surfable water.
+            → `field::system`, `docs/field-system.md`,
+            `tests/field_system_hg.rs` (core + gfx goldens).
+      - [ ] Remaining warp kinds (escalators, ladders, warp panels,
+            dynamic anchors), the elevation collision rule, the
+            location-name popup.
 - [ ] Player movement (grid + HGSS's smooth sub-tile animation), running shoes,
       bicycle.
+      - [x] Movement command machine (113 commands; linear steps at
+            0x800/0x1000/0x2000/0x4000/0x8000 per frame, turns, END) and
+            `PlayerAvatar_MoveControl`, differential-tested against the
+            original ARM9 step functions via arm-runner.
+            → `apricorn-core::field::{map_object,avatar,input}`,
+            `docs/field-movement.md`
+      - [ ] Bicycle, ledges/jumps, surf — later slices.
 - [ ] NPC system, interaction radius, dialogue UI boxes.
 - [ ] Scripting/event engine: HGSS's script VM (flags, vars, triggers) —
       reverse from asm where pret is incomplete; differential-test with
       `arm-runner`.
+      - [x] VM core: 3 contexts, 20-deep stack, u16 opcodes, bank
+            mapping, init-script dispatch, typed flags/vars over save
+            block 4, host trait; the opcode subset used by the early
+            game (std init, bedroom, house, New Bark, Route 29, Elm).
+            → `apricorn-core::script`, `save::vars_flags`,
+            `docs/script-vm.md`
 - [ ] Menus: start menu, bag, party screens — including touch-screen versions.
+      - [x] Start menu port (`src/start_menu.c` + overlay 27's touch-LCD
+            icon grid) as a host-driven scene component with ROM-gated
+            render goldens; the launched apps and the unselected-icon
+            OAM dimming are deferred. → `apricorn-core::app::start_menu`,
+            `docs/menus.md`
 - [ ] Day/night cycle & palette tinting (pinned-clock aware).
+      - [x] Advancing frame-indexed RTC model (melonDS's 32768 Hz tick
+            over 560190-cycle frames), time-of-day buckets (differential
+            vs `GF_RTC_GetTimeOfDayByHour` and the SDK date converters),
+            the five area-light text archives, prop time-of-day visual
+            state. → `apricorn-core::rtc`, `field::{lighting,time_state}`,
+            `docs/day-night.md`
+      - [ ] Apply the area-light template to the field renderer.
+
+Test infrastructure landing with this phase (Phase 2's promise):
+
+- [x] Engine trace producer + headless scripted runner (`apricorn-run`:
+      replay an `.apin` through `Game`, dump PNGs, emit a trace the
+      comparator checks against the oracle; `apricorn-replay --engine`).
+      → `apricorn-harness::engine`, `docs/engine-runner.md`.
+      Finding: the engine's boot seed value is exact (vblank counter 0,
+      matching the oracle's post-seed LCRNG/MT hashes), but the
+      committed boot-idle baseline was a soft-reset loop — the oracle
+      passed the harness's bit-set-equals-held mask into melonDS's
+      active-low `SetKeyMask`, so an idle script held L+R+START+SELECT.
+      The polarity fix and regenerated baseline land with the oracle
+      screenshot work below; the boot-latency frame offset (retail
+      seeds at VBlank 185) is then the remaining engine-side gap.
+- [x] Oracle screenshots (`--shots`) and `corpus/new-game`: the real ROM
+      driven from boot to the bedroom, with milestone frames recorded
+      for engine-vs-ROM visual comparison. The oracle's key-mask polarity
+      is fixed and `corpus/boot-idle` regenerated (a single clock seed at
+      frame 185, the intro's `SetLCRNGSeed(0)` at 186); both cases replay
+      EQUIVALENT. → `corpus/new-game/README.md`, `docs/oracle.md`
 
 **Exit:** free-roam Johto with NPCs, doors, dialogue, and correct day/night —
 validated by replay traces against the oracle.
@@ -250,7 +425,9 @@ validated by replay traces against the oracle.
 
 The largest single phase; break into sub-milestones.
 
-- [ ] Party, PC boxes, bag/items, Pokédex data structures.
+- [ ] Party, PC boxes, bag/items, Pokédex data structures (encryption/
+      shuffle/checksum verified on the retail save and against the
+      original accessors via arm-runner).
 - [ ] Wild encounters: encounter tables, RNG-driven selection, shiny rolls.
 - [ ] Battle core: turn order, damage/stat/status formulas (each
       differential-tested against original ARM functions), type chart,
@@ -279,6 +456,10 @@ Phases 5–6.
 ---
 
 ## Phase 8 — Fidelity hardening & completion
+
+- [ ] Phase 4 parity follow-ups: original-ROM frame/state comparisons for
+      Oak/naming, including nested overlay/fade timing, outstanding Oak
+      sprite waits/yes-no cursor, and post-Oak whole-region comparison.
 
 - [ ] Long-play regression: extended replay scripts covering gyms, rival
       battles, legendaries, Kanto access, Elite 4 → credits.
