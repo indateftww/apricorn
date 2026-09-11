@@ -1,10 +1,22 @@
-//! Static NSBMD subset used by the bedroom: NNS resource dictionaries,
-//! material bindings, SBC material/shape commands and packed GX lists.
-//! Unsupported node transforms/opcodes fail explicitly, never draw junk.
+//! Static NSBMD subset for field geometry: NNS resource dictionaries,
+//! node SRT data (translation, full or pivot-compressed rotation, scale —
+//! NNS `NNSG3dResNodeData`), the SBC node/matrix/material/shape program
+//! with POSSCALE tracking, material bindings and packed GX vertex
+//! streams. Models parse into model space once ([`parse`]) and are
+//! placed per instance ([`place`]) with the same fx32 matrix math the
+//! hardware pipeline uses (64-bit products, arithmetic shift by 12).
+//! Unsupported opcodes fail explicitly, never draw junk.
+//!
+//! Row/column conventions: the NSBMD stores NNS row-vector matrices
+//! (`v' = v · M`, `_ij` = row `i` column `j`); this module keeps every
+//! matrix in the GX column-vector form (`v' = M · v + t`), so a stored
+//! rotation is transposed on read and `G3_MultMtx43(local)` becomes
+//! `current = current × local` (apply `local` first).
 use crate::{
     formats::{Btx, TexFmt},
     nds::{NdsError, u16le, u32le},
 };
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Decoded NNS texture and its bound palette.
@@ -17,10 +29,11 @@ pub struct Texture {
     /// Row-major RGBA8 pixels.
     pub pixels: Vec<[u8; 4]>,
 }
-/// A GX vertex after static node and placement transforms.
+/// A GX vertex after node and placement transforms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Vertex {
-    /// World coordinates with twelve fractional bits.
+    /// Coordinates with twelve fractional bits (model space from
+    /// [`parse`], world space after [`place`]).
     pub position: [i32; 3],
     /// Texture coordinates with four fractional bits.
     pub uv: [i16; 2],
@@ -39,6 +52,126 @@ pub struct Mesh {
     /// Polygon alpha, 0–31.
     pub alpha: u8,
 }
+
+/// One unit in fx32 (twelve fractional bits).
+pub const FX32_ONE: i32 = 4096;
+
+/// fx32 product: 64-bit intermediate, arithmetic shift by 12 — the
+/// hardware/SDK rounding (`FX_Mul`, `asr`), never a rounded division.
+#[must_use]
+pub const fn fx_mul(a: i32, b: i32) -> i32 {
+    ((a as i64 * b as i64) >> 12) as i32
+}
+
+/// A rigid placement of a model into the world:
+/// `world = translation + rotation · (scale ⊙ v)` — the NNS global base
+/// matrix `NNS_G3dGlbSetBaseScale/Rot/Trans` order (scale, then rotation,
+/// then translation), applied outside the model's own node matrices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Placement {
+    /// World translation, fx32.
+    pub translation: [i32; 3],
+    /// Rotation, row-major column-vector fx32 (`v' = R · v`).
+    pub rotation: [[i32; 3]; 3],
+    /// Per-axis scale, fx32.
+    pub scale: [i32; 3],
+}
+
+impl Placement {
+    /// No rotation, unit scale, zero translation.
+    pub const IDENTITY: Self = Self {
+        translation: [0; 3],
+        rotation: [[FX32_ONE, 0, 0], [0, FX32_ONE, 0], [0, 0, FX32_ONE]],
+        scale: [FX32_ONE; 3],
+    };
+
+    /// A pure translation.
+    #[must_use]
+    pub const fn at(translation: [i32; 3]) -> Self {
+        Self {
+            translation,
+            ..Self::IDENTITY
+        }
+    }
+
+    /// Transforms one model-space point.
+    #[must_use]
+    pub fn apply(&self, v: [i32; 3]) -> [i32; 3] {
+        let s = [
+            fx_mul(v[0], self.scale[0]),
+            fx_mul(v[1], self.scale[1]),
+            fx_mul(v[2], self.scale[2]),
+        ];
+        let mut out = self.translation;
+        for (r, row) in self.rotation.iter().enumerate() {
+            let acc = (0..3).map(|c| row[c] as i64 * s[c] as i64).sum::<i64>();
+            out[r] += (acc >> 12) as i32;
+        }
+        out
+    }
+}
+
+/// Copies `meshes` with every vertex run through `placement`.
+#[must_use]
+pub fn place(meshes: &[Mesh], placement: &Placement) -> Vec<Mesh> {
+    meshes
+        .iter()
+        .map(|mesh| Mesh {
+            triangles: mesh
+                .triangles
+                .iter()
+                .map(|tri| {
+                    tri.map(|v| Vertex {
+                        position: placement.apply(v.position),
+                        ..v
+                    })
+                })
+                .collect(),
+            texture: mesh.texture.clone(),
+            texture_flags: mesh.texture_flags,
+            alpha: mesh.alpha,
+        })
+        .collect()
+}
+
+/// 4x3 fx32 affine matrix in column-vector form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Mtx43 {
+    m: [[i32; 3]; 3],
+    t: [i32; 3],
+}
+
+impl Mtx43 {
+    const IDENTITY: Self = Self {
+        m: [[FX32_ONE, 0, 0], [0, FX32_ONE, 0], [0, 0, FX32_ONE]],
+        t: [0; 3],
+    };
+
+    fn apply(&self, v: [i32; 3]) -> [i32; 3] {
+        let mut out = self.t;
+        for r in 0..3 {
+            let acc = (0..3).map(|c| self.m[r][c] as i64 * v[c] as i64).sum::<i64>();
+            out[r] += (acc >> 12) as i32;
+        }
+        out
+    }
+
+    /// `self × rhs`: applies `rhs` first, then `self` — `G3_MultMtx43`.
+    fn mul(&self, rhs: &Self) -> Self {
+        let mut m = [[0i32; 3]; 3];
+        for r in 0..3 {
+            for c in 0..3 {
+                let acc = (0..3).map(|k| self.m[r][k] as i64 * rhs.m[k][c] as i64).sum::<i64>();
+                m[r][c] = (acc >> 12) as i32;
+            }
+        }
+        Self {
+            m,
+            t: self.apply(rhs.t),
+        }
+    }
+}
+
 fn invalid(what: &'static str) -> NdsError {
     NdsError::Invalid { what }
 }
@@ -119,7 +252,90 @@ fn expand(v: u16) -> u8 {
     ((v << 3) | (v >> 2)) as u8
 }
 
-pub(crate) fn parse(b: &[u8], tex: &Btx<'_>, translation: [i32; 3]) -> Result<Vec<Mesh>, NdsError> {
+/// Sign-extends an fx16.
+fn fx16(b: &[u8], p: usize) -> Result<i32, NdsError> {
+    Ok(u16le(b, p)? as i16 as i32)
+}
+
+/// Decodes one node's SRT record (`NNSG3dResNodeData` at `p`):
+/// `u16 flag; fx16 _00;` then, gated by the flag's low bits (set = the
+/// component is trivial and absent), `VecFx32 trans`, the rotation —
+/// `fx16 A, B` when bit 3 marks a pivot, else the remaining eight fx16
+/// row-major elements `_01.._22` — and `VecFx32 scale, invScale`. Pivot
+/// rotations put ±1 at row/column `idx = flag>>4 & 15` (bit 8 negates)
+/// and `[A B; C D]` on the other rows × columns, `C = ±B` (bit 9),
+/// `D = ±A` (bit 10). Retail bm_field prop 27's node 1 is the worked
+/// example: flag `0xFA4C`, a 40° pivot-Y rotation with `_00 == A`.
+fn node_matrix(m: &[u8], p: usize) -> Result<Mtx43, NdsError> {
+    let flag = u16le(m, p)?;
+    let m00 = fx16(m, p + 2)?;
+    let mut q = p + 4;
+    let mut t = [0i32; 3];
+    if flag & 1 == 0 {
+        for axis in &mut t {
+            *axis = u32le(m, q)? as i32;
+            q += 4;
+        }
+    }
+    // Row-vector rotation as stored (`rows[i][j]` = `_ij`).
+    let mut rows = [[FX32_ONE, 0, 0], [0, FX32_ONE, 0], [0, 0, FX32_ONE]];
+    if flag & 2 == 0 {
+        if flag & 8 != 0 {
+            let a = fx16(m, q)?;
+            let b = fx16(m, q + 2)?;
+            q += 4;
+            let idx = ((flag >> 4) & 15) as usize;
+            if idx > 8 {
+                return Err(invalid("model node pivot index"));
+            }
+            let (pr, pc) = (idx / 3, idx % 3);
+            let one = if flag & 0x100 != 0 { -FX32_ONE } else { FX32_ONE };
+            let c = if flag & 0x200 != 0 { -b } else { b };
+            let d = if flag & 0x400 != 0 { -a } else { a };
+            let others = |i: usize| -> [usize; 2] {
+                let mut it = (0..3).filter(|&k| k != i);
+                [it.next().unwrap(), it.next().unwrap()]
+            };
+            let (rs, cs) = (others(pr), others(pc));
+            rows = [[0; 3]; 3];
+            rows[pr][pc] = one;
+            rows[rs[0]][cs[0]] = a;
+            rows[rs[0]][cs[1]] = b;
+            rows[rs[1]][cs[0]] = c;
+            rows[rs[1]][cs[1]] = d;
+        } else {
+            rows[0][0] = m00;
+            let rest = [(0, 1), (0, 2), (1, 0), (1, 1), (1, 2), (2, 0), (2, 1), (2, 2)];
+            for (i, j) in rest {
+                rows[i][j] = fx16(m, q)?;
+                q += 2;
+            }
+        }
+    }
+    let mut s = [FX32_ONE; 3];
+    if flag & 4 == 0 {
+        for axis in &mut s {
+            *axis = u32le(m, q)? as i32;
+            q += 4;
+        }
+        // invScale follows; unused here.
+    }
+    // Column-vector form of (scale, then rotate): M[r][c] = rows[c][r] * s[c].
+    let mut out = [[0i32; 3]; 3];
+    for r in 0..3 {
+        for c in 0..3 {
+            out[r][c] = fx_mul(rows[c][r], s[c]);
+        }
+    }
+    Ok(Mtx43 { m: out, t })
+}
+
+/// Parses a single-model BMD0 into model space: node SRTs applied
+/// through the SBC program, POSSCALE applied to the shapes it brackets,
+/// and each material/shape pair decoded into one [`Mesh`] with its
+/// texture bound from `tex`. Textures shared within the model decode
+/// once.
+pub(crate) fn parse(b: &[u8], tex: &Btx<'_>) -> Result<Vec<Mesh>, NdsError> {
     if slice(b, 0, 4)? != b"BMD0" || u32le(b, 8)? as usize != b.len() {
         return Err(invalid("BMD0 header"));
     }
@@ -135,12 +351,11 @@ pub(crate) fn parse(b: &[u8], tex: &Btx<'_>, translation: [i32; 3]) -> Result<Ve
     let offset = u32le(models[0].1, 0)? as usize;
     let m = slice(set, offset, u32le(set, offset)? as usize)?;
     let nodes = dict(m, 64)?;
-    for (_, d) in &nodes {
-        if u16le(m, 64 + u32le(d, 0)? as usize)? & 7 != 7 {
-            return Err(invalid("static identity model node"));
-        }
-    }
-    let scale = u32le(m, 28)? as i32;
+    let node_matrices = nodes
+        .iter()
+        .map(|(_, d)| node_matrix(m, 64 + u32le(d, 0)? as usize))
+        .collect::<Result<Vec<_>, _>>()?;
+    let pos_scale = u32le(m, 28)? as i32;
     let mat = u32le(m, 8)? as usize;
     let shp = u32le(m, 12)? as usize;
     let materials = dict(m, mat + 4)?;
@@ -161,9 +376,14 @@ pub(crate) fn parse(b: &[u8], tex: &Btx<'_>, translation: [i32; 3]) -> Result<Ve
             }
         }
     }
+    let mut textures: HashMap<(&str, &str), Arc<Texture>> = HashMap::new();
     let mut meshes = Vec::new();
     let mut p = u32le(m, 4)? as usize;
     let mut selected = 0;
+    let mut current = Mtx43::IDENTITY;
+    let mut stack: [Option<Mtx43>; 32] = [None; 32];
+    let mut scaled = false;
+    let mut visible = true;
     while p < mat {
         let op = m[p];
         p += 1;
@@ -171,18 +391,41 @@ pub(crate) fn parse(b: &[u8], tex: &Btx<'_>, translation: [i32; 3]) -> Result<Ve
             0 => {}
             1 => break,
             2 => {
-                slice(m, p, 2)?;
+                let args = slice(m, p, 2)?;
+                visible = args[1] != 0;
                 p += 2;
             }
-            0x26 => {
-                slice(m, p, 4)?;
-                p += 4;
+            3 => {
+                let idx = slice(m, p, 1)?[0] as usize;
+                p += 1;
+                current = stack
+                    .get(idx)
+                    .copied()
+                    .flatten()
+                    .ok_or(invalid("SBC matrix restore"))?;
             }
-            0x06 => {
-                slice(m, p, 3)?;
-                p += 3;
+            0x06 | 0x26 | 0x46 | 0x66 => {
+                let extra = usize::from(op & 0x20 != 0) + usize::from(op & 0x40 != 0);
+                let args = slice(m, p, 3 + extra)?;
+                p += 3 + extra;
+                let node = args[0] as usize;
+                if op & 0x40 != 0 {
+                    let idx = args[3 + usize::from(op & 0x20 != 0)] as usize;
+                    current = stack
+                        .get(idx)
+                        .copied()
+                        .flatten()
+                        .ok_or(invalid("SBC node restore"))?;
+                }
+                let local = node_matrices.get(node).ok_or(invalid("SBC node index"))?;
+                current = current.mul(local);
+                if op & 0x20 != 0 {
+                    let idx = args[3] as usize;
+                    *stack.get_mut(idx).ok_or(invalid("SBC node store"))? = Some(current);
+                }
             }
-            0x0b | 0x2b => {}
+            0x0b => scaled = true,
+            0x2b => scaled = false,
             4 | 0x24 | 0x44 => {
                 selected = *slice(m, p, 1)?.first().unwrap() as usize;
                 p += 1;
@@ -190,6 +433,9 @@ pub(crate) fn parse(b: &[u8], tex: &Btx<'_>, translation: [i32; 3]) -> Result<Ve
             5 => {
                 let id = slice(m, p, 1)?[0] as usize;
                 p += 1;
+                if !visible {
+                    continue;
+                }
                 let (_, d) = materials.get(selected).ok_or(invalid("SBC material"))?;
                 let material = mat + u32le(d, 0)? as usize;
                 let (_, d) = shapes.get(id).ok_or(invalid("SBC shape"))?;
@@ -200,15 +446,22 @@ pub(crate) fn parse(b: &[u8], tex: &Btx<'_>, translation: [i32; 3]) -> Result<Ve
                     u32le(m, shape + 12)? as usize,
                 )?;
                 let texture = match (tex_names[selected], pal_names[selected]) {
-                    (Some(t), Some(p)) => Some(Arc::new(decode_texture(tex, t, p)?)),
+                    (Some(t), Some(pal)) => Some(match textures.get(&(t, pal)) {
+                        Some(cached) => cached.clone(),
+                        None => {
+                            let decoded = Arc::new(decode_texture(tex, t, pal)?);
+                            textures.insert((t, pal), decoded.clone());
+                            decoded
+                        }
+                    }),
                     (None, None) => None,
                     _ => return Err(invalid("incomplete material binding")),
                 };
                 meshes.push(Mesh {
                     triangles: display_list(
                         dl,
-                        scale,
-                        translation,
+                        if scaled { pos_scale } else { FX32_ONE },
+                        &current,
                         u16le(m, material + 4)? & 32767,
                     )?,
                     texture,
@@ -227,7 +480,7 @@ fn sign10(v: u32) -> i32 {
 fn display_list(
     b: &[u8],
     scale: i32,
-    translation: [i32; 3],
+    node: &Mtx43,
     initial: u16,
 ) -> Result<Vec<[Vertex; 3]>, NdsError> {
     let mut p = 0;
@@ -244,7 +497,8 @@ fn display_list(
             let n = match op {
                 0 | 0x41 => 0,
                 0x23 => 2,
-                0x20..=0x22 | 0x24..=0x2b | 0x40 => 1,
+                0x20..=0x22 | 0x24..=0x2b | 0x30..=0x33 | 0x40 => 1,
+                0x34 => 32,
                 _ => return Err(invalid("unsupported field GX command")),
             };
             let args = slice(b, p, n * 4)?;
@@ -280,7 +534,11 @@ fn display_list(
                         position[i] += sign10(a >> (i * 10));
                     }
                 }
-                0x29..=0x2b => {}
+                // POLYGON_ATTR, TEXIMAGE_PARAM, PLTT_BASE and the material
+                // lighting parameters (DIF_AMB .. SHININESS) carry no
+                // geometry; the material record already supplies what the
+                // rasterizer needs.
+                0x29..=0x2b | 0x30..=0x34 => {}
                 0x40 => {
                     primitive = Some(a & 3);
                     vertices.clear();
@@ -292,12 +550,13 @@ fn display_list(
                 if primitive.is_none() {
                     return Err(invalid("vertex outside primitive"));
                 }
-                let mut world = translation;
-                for i in 0..3 {
-                    world[i] += ((position[i] as i64 * scale as i64) >> 12) as i32;
-                }
+                let local = [
+                    fx_mul(position[0], scale),
+                    fx_mul(position[1], scale),
+                    fx_mul(position[2], scale),
+                ];
                 vertices.push(Vertex {
-                    position: world,
+                    position: node.apply(local),
                     uv,
                     color,
                 });
@@ -322,4 +581,69 @@ fn display_list(
         }
     }
     Ok(triangles)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fx_mul_truncates_like_the_hardware() {
+        assert_eq!(fx_mul(FX32_ONE, FX32_ONE), FX32_ONE);
+        assert_eq!(fx_mul(-1, FX32_ONE), -1);
+        // -0.5 * 0.5 = -0.25 exactly; -1/4096 * 1/4096 rounds toward -inf.
+        assert_eq!(fx_mul(-2048, 2048), -1024);
+        assert_eq!(fx_mul(-1, 1), -1);
+    }
+
+    #[test]
+    fn placement_scales_rotates_then_translates() {
+        // 90° about Y in column form: x' = z, z' = -x.
+        let p = Placement {
+            translation: [100, 200, 300],
+            rotation: [[0, 0, FX32_ONE], [0, FX32_ONE, 0], [-FX32_ONE, 0, 0]],
+            scale: [2 * FX32_ONE, FX32_ONE, FX32_ONE],
+        };
+        assert_eq!(p.apply([10, 20, 30]), [130, 220, 280]);
+        assert_eq!(Placement::IDENTITY.apply([1, 2, 3]), [1, 2, 3]);
+        assert_eq!(Placement::at([5, 6, 7]).apply([1, 2, 3]), [6, 8, 10]);
+    }
+
+    #[test]
+    fn matrix_product_applies_rhs_first() {
+        let t = Mtx43 {
+            t: [FX32_ONE, 0, 0],
+            ..Mtx43::IDENTITY
+        };
+        let r = Mtx43 {
+            m: [[0, 0, FX32_ONE], [0, FX32_ONE, 0], [-FX32_ONE, 0, 0]],
+            t: [0; 3],
+        };
+        // (r × t)(v) = r(t(v)): translate then rotate.
+        let v = [0, 0, 0];
+        assert_eq!(r.mul(&t).apply(v), [0, 0, -FX32_ONE]);
+        assert_eq!(t.mul(&r).apply(v), [FX32_ONE, 0, 0]);
+    }
+
+    #[test]
+    fn pivot_node_decodes_the_retail_example() {
+        // bm_field 27 node 1: flag 0xFA4C, trans (0, 5.0, 0), A/B = cos/sin 40°.
+        let mut rec = vec![0x4C, 0xFA, 0x42, 0x0C];
+        rec.extend_from_slice(&0u32.to_le_bytes());
+        rec.extend_from_slice(&0x50000u32.to_le_bytes());
+        rec.extend_from_slice(&0u32.to_le_bytes());
+        rec.extend_from_slice(&[0x42, 0x0C, 0x49, 0x0A]);
+        let n = node_matrix(&rec, 0).unwrap();
+        assert_eq!(n.t, [0, 0x50000, 0]);
+        // Row-vector rows: [[A,0,B],[0,1,0],[-B,0,A]] → column form transposed.
+        assert_eq!(n.m[0], [0x0C42, 0, -0x0A49]);
+        assert_eq!(n.m[1], [0, FX32_ONE, 0]);
+        assert_eq!(n.m[2], [0x0A49, 0, 0x0C42]);
+    }
+
+    #[test]
+    fn identity_node_is_identity() {
+        let rec = [0x07, 0x00, 0x00, 0x10];
+        assert_eq!(node_matrix(&rec, 0).unwrap(), Mtx43::IDENTITY);
+    }
 }

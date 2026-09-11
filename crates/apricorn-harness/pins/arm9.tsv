@@ -83,3 +83,10 @@ sub_020312A4	thumb	0x020312A4	6	caa961e6e890a4befd0b3de25dd3e2832a6474ff	gExtraS
 sub_0202FBCC	thumb	0x0202FBCC	4	95759c3ae4495c8193b0486db892f248c8848327	gExtraSaveChunkHeaders @ 0x020F6464 (6-record id/sector/fn-ptr scan)
 gSaveChunkHeaders	data	0x020F64C4	672	4f42e7009212aa46b57ab5463f144fefab7696e3	record scan: 42 x {int id 0..41, u32 block, thumb fn ptrs}
 gExtraSaveChunkHeaders	data	0x020F6464	96	fad6e7e8bd725a3e44ec3e16489e1195663393b0	record scan: 6 x {int id 0..5, u32 sector 35/38/39/41/43/45, thumb fn ptrs}
+
+# Field data (Phase 5) - see docs/field-data.md. The map header table was
+# located by encoding map 64's record from pret src/data/map_headers.h
+# (constants resolved) and scanning the image for those 24 bytes: one hit,
+# in slot 64 of a 540-record table; neighbours decode to pret's records.
+
+sMapHeaders	data	0x020F6BE0	12960	26ea13ffdda304dde0159e3eda1fccf7eeac66b1	record scan: map 64's 24-byte record @ 0x020F71E0 (540 x 24 B)
