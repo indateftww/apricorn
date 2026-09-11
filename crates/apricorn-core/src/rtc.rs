@@ -418,7 +418,7 @@ fn days_in_month(year: u32, month: u32) -> u32 {
 
 /// The hardware clock as the oracle emulates it: a pinned start that
 /// then advances with the emulated cycles, one second per
-/// [`Self::CYCLES_PER_SECOND`] ARM7-clock cycles.
+/// [`Self::CYCLES_PER_SECOND`] system-clock cycles.
 ///
 /// melonDS (`src/RTC.cpp`, `RTC::ScheduleTimer`/`ClockTimer`) runs the
 /// RTC crystal at 32768 Hz off the 33513982 Hz system clock with a
@@ -462,11 +462,11 @@ pub struct RtcClock {
 }
 
 impl RtcClock {
-    /// ARM7-clock cycles per RTC second — melonDS's `33513982`
+    /// System-clock (ARM7 bus) cycles per RTC second — melonDS's `33513982`
     /// (`RTC::ScheduleTimer`), 32768 ticks of `33513982 / 32768`.
     pub const CYCLES_PER_SECOND: u64 = 33_513_982;
 
-    /// ARM7-clock cycles per frame — 263 lines × 355 × 6
+    /// System-clock cycles per frame — 263 lines × 355 × 6
     /// (`GPU.cpp` `FRAME_CYCLES`, `NDS::RunFrame` `frametarget`).
     pub const CYCLES_PER_FRAME: u64 = 560_190;
 
