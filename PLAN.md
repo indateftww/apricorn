@@ -285,10 +285,8 @@ and the retail ground truth `scripts/shots.ps1 corpus/new-game "4816"`.
 
 Picking this up later:
 
-- The work lives on branch `claude/game-development-progress-fda06c`
-  (checked out in the worktree `.claude/worktrees/game-development-progress-fda06c`
-  at the time of writing); `main` is still at Phase 4's acceptance
-  (`ac469ad`). Merge or continue from that branch.
+- Phase 5 work was done on branch `claude/game-development-progress-fda06c`
+  and is being merged into `main` by the user; continue from `main`.
 - Two unreviewed partial branches are parked, each one WIP commit off
   `ac469ad`: `parked/phase6-pokemon-data` (Pokémon encryption/party/
   bag/Pokédex views, `docs/pokemon.md`) and `parked/phase7-audio` (the
@@ -298,7 +296,7 @@ Picking this up later:
   or hardlink `hg_usa.nds` and `hg.sav` into the checkout root, clone
   `refs/pokeheartgold` and `refs/melonds`, build the oracle with
   `oracle/setup.ps1`. Cargo needs MinGW on `PATH` on Windows
-  (`C:\msys64\mingw64in`) for the GNU toolchain's `dlltool`.
+  (`C:/msys64/mingw64/bin`) for the GNU toolchain's `dlltool`.
 - Next objective in order: NPC objects + the script host (Mom's scene,
   dialogue boxes, init scripts on map load), then the start-menu and
   lighting hookups, the touch bottom screen, bag/party screens, then
