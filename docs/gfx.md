@@ -255,7 +255,8 @@ When an engine frame carries a `field`, BG0 *is* the 3D plane:
   (ties to the lower BG index; OBJ wins ties), then the blend unit,
   the backdrop, and master brightness last.
 * A 3D pixel blends with the topmost second-target pixel below it by
-  its **own** alpha — `(first · (a+1) + second · (32−a−1)) >> 5`,
+  its **own** alpha — `(first · (a+1) + second · (32−a−1) + 16) >> 5`
+  per channel, rounded to nearest by the `+ 16` (half the divisor),
   melonDS `GPU2D_Soft.h` `ColorBlend5` — whenever `BLDCNT` names that
   plane a second target, regardless of the effect mode or the
   first-target mask; an opaque pixel (`a = 31`) is unchanged, so the

@@ -1592,14 +1592,18 @@ mod field_compositing {
         // No second target: the pixel shows as is, whatever the mode.
         let [main, _] = render(&frame, &store);
         assert_eq!(main.pixel(128, 96), [255, 0, 0, 255]);
-        // BG1 as a second target: ColorBlend5 with eva = 16, evb = 16,
-        // regardless of the effect mode or first-target mask.
+        // BG1 as a second target: ColorBlend5 with eva = 16, evb = 16
+        // and the + 0x10 rounding term, regardless of the effect mode
+        // or first-target mask. The blue channel pins the rounding:
+        // (0 · 16 + 5 · 16 + 16) >> 5 = 3, where an unrounded shift
+        // would give 2.
         frame.main.blend = Blend {
             plane2: plane::BG1,
             ..Blend::default()
         };
         let [main, _] = render(&frame, &store);
-        let mix = |a: u32, b: u32| ((a * 16 + b * 16) >> 5) as u8;
+        let mix = |a: u32, b: u32| ((a * 16 + b * 16 + 0x10) >> 5) as u8;
+        assert_eq!(mix(0, 5), 3);
         assert_eq!(
             main.pixel(128, 96),
             [mix(255, 5), mix(0, 5), mix(0, 5), 255]

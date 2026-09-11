@@ -608,8 +608,9 @@ mod tests {
         assert!((expected - 1.0).abs() < 0.02);
 
         // Behind the eye projects to nothing.
-        assert!(cam
-            .project([target[0], 0, target[2] + 10_000 * FX32_ONE])
-            .is_none());
+        assert!(
+            cam.project([target[0], 0, target[2] + 10_000 * FX32_ONE])
+                .is_none()
+        );
     }
 }

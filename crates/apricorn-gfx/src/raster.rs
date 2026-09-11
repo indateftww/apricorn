@@ -50,8 +50,8 @@
 //!   compositor samples it in BG0's place with BG0's `priority`,
 //!   `enabled` and `hidden_rect`, ignoring BG0's tilemap and windows.
 //!   A 3D pixel blends with the topmost second-target pixel below it
-//!   by its *own* alpha — `(first · (a + 1) + second · (32 − a − 1))
-//!   >> 5`, melonDS's `ColorBlend5` — whenever `BLDCNT` names that
+//!   by its *own* alpha — `(first · (a + 1) + second · (32 − a − 1)
+//!   + 16) >> 5`, melonDS's `ColorBlend5` — whenever `BLDCNT` names that
 //!   plane a second target, regardless of the effect mode or the
 //!   first-target mask (an opaque pixel, `a = 31`, comes through
 //!   unchanged); without a second target the brightness effects apply
@@ -367,15 +367,17 @@ fn alpha5(alpha: u8) -> u8 {
     ((u32::from(alpha) * 31 + 127) / 255) as u8
 }
 
-/// The 3D plane's own alpha blend — melonDS `GPU2D_Soft.h`
+/// The 3D plane's own alpha blend — melonDS `GPU2D_Soft.h:81-96`
 /// `ColorBlend5`: `eva = a + 1`, `evb = 32 − eva`, per channel
-/// `(first · eva + second · evb) >> 5`, clamped; in 8-bit channels
+/// `(first · eva + second · evb + 0x10) >> 5`, clamped — the `+ 0x10`
+/// is half the divisor, so the mix rounds to nearest like the
+/// register blend's `+ 8) >> 4` in [`alpha_blend`]; in 8-bit channels
 /// here where melonDS works in 6.
 fn blend_3d(first: [u8; 4], second: [u8; 4], alpha: u8) -> [u8; 4] {
     let eva = u32::from(alpha.min(31)) + 1;
     let evb = 32 - eva;
     let mix = |a: u8, b: u8| {
-        let v = (u32::from(a) * eva + u32::from(b) * evb) >> 5;
+        let v = (u32::from(a) * eva + u32::from(b) * evb + 0x10) >> 5;
         u8::try_from(v.min(0xFF)).expect("clamped to u8")
     };
     [
