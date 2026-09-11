@@ -13,10 +13,13 @@
 //! the identity in camera space (local +x is screen right, +y screen
 //! up). Its quad is `x ∈ [−16, 16], y ∈ [0, 32], z = 0` with UVs
 //! `(0, 32)` at the bottom-left and `(32, 0)` at the top-right (both
-//! read from the ROM's display list): the model is anchored at the
-//! character's **feet** and stands 32 units tall, which the field
-//! presets scale to ≈1 px per unit at the target depth. The 16×16 and
-//! 64×64 classes are the same shape at their sizes.
+//! read from the ROM's display list — `posScale` 8 over a `VTX_10` /
+//! `VTX_XY` strip of `(−2, 0), (2, 0), (2, 4), (−2, 4)`): the model is
+//! anchored at the character's **feet** and stands 32 units tall,
+//! which the field presets scale to ≈1 px per unit at the target
+//! depth. The 16×16 class (member 267, `posScale` 4, `x ∈ [−8, 8]`,
+//! `y ∈ [0, 16]`, `v = 16` at the bottom) and the 64×64 class are the
+//! same shape at their sizes.
 //!
 //! The quad is drawn by `BillboardLists_Draw` (`asm/unk_02023694.s:171`
 //! → `sub_02023950` → `GF3dRender_DrawModel`) after the map, while the

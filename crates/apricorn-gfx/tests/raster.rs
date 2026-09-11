@@ -1461,7 +1461,11 @@ mod field_compositing {
         let screen = store.add_screen(8, 8, &[entry(0, false, false, 0)]);
         let palette = store.add_palette(true, &gray_palette(16));
         let mut frame = LogicalFrame {
-            main: engine(&[BgLayer::default(), bg_layer(screen)], &[(0, tiles)], palette),
+            main: engine(
+                &[BgLayer::default(), bg_layer(screen)],
+                &[(0, tiles)],
+                palette,
+            ),
             ..LogicalFrame::default()
         };
         frame.main.field = Some(field(100, 31));
@@ -1507,7 +1511,11 @@ mod field_compositing {
         frame.main.bgs[0].enabled = true;
         frame.main.bgs[0].hidden_rect = Some((120, 90, 136, 102));
         let [main, _] = render(&frame, &store);
-        assert_eq!(main.pixel(128, 96), [0, 0, 255, 255], "hidden inside the rect");
+        assert_eq!(
+            main.pixel(128, 96),
+            [0, 0, 255, 255],
+            "hidden inside the rect"
+        );
         assert_eq!(main.pixel(140, 96), [255, 0, 0, 255], "shown outside it");
     }
 
@@ -1592,7 +1600,10 @@ mod field_compositing {
         };
         let [main, _] = render(&frame, &store);
         let mix = |a: u32, b: u32| ((a * 16 + b * 16) >> 5) as u8;
-        assert_eq!(main.pixel(128, 96), [mix(255, 5), mix(0, 5), mix(0, 5), 255]);
+        assert_eq!(
+            main.pixel(128, 96),
+            [mix(255, 5), mix(0, 5), mix(0, 5), 255]
+        );
         // An opaque field pixel over a second target is unchanged even
         // under an alpha effect with EVA/EBV set — the 3D plane never
         // uses the register weights.

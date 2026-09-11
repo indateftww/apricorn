@@ -220,8 +220,10 @@ what the demo script and the window are for.
 `apricorn-gfx::field` draws the overworld: the picture engine A's BG0
 shows while a map is up. This is the crate's one documented exception
 to "no floating point" — `f64` with a fixed evaluation order and no
-transcendental function, so a scene still renders bit-identically on
-every platform (the SHA-1 goldens in `tests/field_hg.rs` are the
+transcendental call in the render path (the SDK's sine table is
+regenerated once from `sin`/`cos` rounded to fx16 and pinned by SHA-1
+against the vendored table), so a scene still renders bit-identically
+on every platform (the SHA-1 goldens in `tests/field_hg.rs` are the
 proof, as `tests/raster_hg.rs` is for the 2D path).
 
 ### What the original does

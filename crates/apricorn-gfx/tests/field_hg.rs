@@ -67,7 +67,8 @@ fn bedroom_golden_through_bg0() {
         }
         let hash = sha1(pixels);
         assert_eq!(
-            hash, BEDROOM_GOLDEN[usize::from(gender)],
+            hash,
+            BEDROOM_GOLDEN[usize::from(gender)],
             "bedroom gender {gender} engine A hash"
         );
     }
@@ -98,9 +99,15 @@ fn bedroom_field_plane_is_covered_and_the_player_stands_at_the_centre() {
     // nearer than the anchor: the bias of ≈5.2 units covers it).
     let feet = 96 * 256 + 128;
     let body = 85 * 256 + 128;
-    assert!(depth[body] < depth[feet + 256 * 2], "the sprite beats the floor");
+    assert!(
+        depth[body] < depth[feet + 256 * 2],
+        "the sprite beats the floor"
+    );
     let view = field::scene_view(&scene);
-    let centre = view.camera.project(field::tile_position(scene.position)).unwrap();
+    let centre = view
+        .camera
+        .project(field::tile_position(scene.position))
+        .unwrap();
     assert!((centre[0] - 128.0).abs() < 1e-9 && (centre[1] - 96.0).abs() < 1e-9);
     // With BG0 disabled the compositor shows the backdrop instead.
     let mut frame = LogicalFrame::default();

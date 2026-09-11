@@ -12,10 +12,12 @@
 //! billboard bias — and only then moves to `f64` for the matrices,
 //! which the SDK builds in fx32 (`MTX_LookAt`, `MTX_PerspectiveW`,
 //! `MTX_OrthoW`, `lib/NitroSDK/asm/fx_mtx4[34].s`). The `f64` stage
-//! uses no transcendental function: sines and cosines come from the
-//! table, tangents from the table quotient, and the one square root
-//! (`MTX_LookAt`'s normalisation) is IEEE-exact on every platform, so
-//! the projection of a given point is bit-identical everywhere.
+//! calls no transcendental function: sines and cosines come from the
+//! table (regenerated once with the platform's `sin`/`cos` rounded to
+//! fx16 — the SHA-1 test pins every entry to the SDK's), tangents from
+//! the table quotient, and the one square root (`MTX_LookAt`'s
+//! normalisation) is IEEE-exact on every platform, so the projection
+//! of a given point is bit-identical everywhere.
 //!
 //! Conventions, as the SDK's: row vectors (`v' = v · M`), camera space
 //! has +x right, +y up, and the view looking down −z; clip space
@@ -235,7 +237,11 @@ impl Camera {
             i64::from(target[1]) + offset[1],
             i64::from(target[2]) + offset[2],
         ];
-        let position_fx = [target_fx[0] + cam_x, target_fx[1] + cam_y, target_fx[2] + cam_z];
+        let position_fx = [
+            target_fx[0] + cam_x,
+            target_fx[1] + cam_y,
+            target_fx[2] + cam_z,
+        ];
         let to_units = |v: i64| v as f64 / f64::from(FX32_ONE);
         let position = position_fx.map(to_units);
         let target = target_fx.map(to_units);
@@ -247,9 +253,13 @@ impl Camera {
         let near = to_units(i64::from(preset.near));
         let far = to_units(i64::from(preset.far));
         let projection = match preset.projection {
-            Projection::Perspective => {
-                perspective(fovy_sin as f64, fovy_cos as f64, to_units(i64::from(ASPECT_FX32)), near, far)
-            }
+            Projection::Perspective => perspective(
+                fovy_sin as f64,
+                fovy_cos as f64,
+                to_units(i64::from(ASPECT_FX32)),
+                near,
+                far,
+            ),
             Projection::Orthographic => {
                 // fx32 end to end, as the C does: y = tan · distance,
                 // x = y · aspect; NNS_G3dGlbOrtho(y, -y, -x, x, n, f).
@@ -262,7 +272,8 @@ impl Camera {
 
         // fieldmap.c:590-596: (unk11C << 12) * FX_CosIdx(-angle.x),
         // rounded to fx32, times _22, rounded, added to _32.
-        let bias_fx = ((i64::from(BILLBOARD_BIAS_UNITS) << 12) * i64::from(cos_idx(neg_x)) + 0x800) >> 12;
+        let bias_fx =
+            ((i64::from(BILLBOARD_BIAS_UNITS) << 12) * i64::from(cos_idx(neg_x)) + 0x800) >> 12;
         let billboard_bias = to_units(bias_fx);
         let mut billboard_projection = projection;
         billboard_projection[3][2] += projection[2][2] * billboard_bias;
@@ -498,7 +509,9 @@ mod tests {
         assert!((centre[1] - 96.0).abs() < 1e-9);
 
         // One tile east: 16 units → 16 · 128 / half_x pixels right.
-        let east = cam.project([target[0] + 16 * FX32_ONE, 0, target[2]]).unwrap();
+        let east = cam
+            .project([target[0] + 16 * FX32_ONE, 0, target[2]])
+            .unwrap();
         assert!((east[0] - (128.0 + 16.0 * 128.0 / half_x)).abs() < 1e-9);
         assert!((east[1] - 96.0).abs() < 1e-9);
 
@@ -508,9 +521,13 @@ mod tests {
         // sin(pitch) = 1194.75 / distance, so the point moves down by
         // 16 · sin(pitch) · 96 / half_y pixels and closer to the
         // camera (smaller NDC depth).
-        let south = cam.project([target[0], 0, target[2] + 16 * FX32_ONE]).unwrap();
+        let south = cam
+            .project([target[0], 0, target[2] + 16 * FX32_ONE])
+            .unwrap();
         let sin_pitch = (cam.position[1] - cam.target[1])
-            / ((cam.position[1] - cam.target[1]).powi(2) + (cam.position[2] - cam.target[2]).powi(2)).sqrt();
+            / ((cam.position[1] - cam.target[1]).powi(2)
+                + (cam.position[2] - cam.target[2]).powi(2))
+            .sqrt();
         assert!((south[1] - (96.0 + 16.0 * sin_pitch * 96.0 / half_y)).abs() < 1e-9);
         assert!(south[2] < centre[2]);
 
@@ -567,6 +584,9 @@ mod tests {
         assert!((expected - 1.0).abs() < 0.02);
 
         // Behind the eye projects to nothing.
-        assert!(cam.project([target[0], 0, target[2] + 10_000 * FX32_ONE]).is_none());
+        assert!(
+            cam.project([target[0], 0, target[2] + 10_000 * FX32_ONE])
+                .is_none()
+        );
     }
 }

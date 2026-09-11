@@ -29,8 +29,9 @@
 //! not double-blend), interpolated perspective-correctly, textured
 //! with nearest texels honouring the material's repeat/flip bits, and
 //! modulated by the interpolated vertex colour. Everything is `f64`
-//! with a fixed evaluation order and no transcendental function — the
-//! camera's sines and cosines come from the SDK's table — so a scene
+//! with a fixed evaluation order and no transcendental call in the
+//! render path — the camera's sines and cosines come from the SDK's
+//! fx16 table, regenerated once and pinned by SHA-1 — so a scene
 //! renders bit-identically on every platform (the documented exception
 //! to the crate's integer rule; `docs/gfx.md`, "Field (3D) layer").
 //!
@@ -98,7 +99,11 @@ pub struct SceneView<'a> {
 /// (`PlayerAvatar_GetPositionVector`; one tile is 16 world units).
 #[must_use]
 pub fn tile_position(tile: [i32; 2]) -> [i32; 3] {
-    [(tile[0] * 16 + 8) * FX32_ONE, 0, (tile[1] * 16 + 8) * FX32_ONE]
+    [
+        (tile[0] * 16 + 8) * FX32_ONE,
+        0,
+        (tile[1] * 16 + 8) * FX32_ONE,
+    ]
 }
 
 /// The shim: today's [`FieldScene`] as a view — camera preset 4 (the
@@ -161,7 +166,13 @@ pub fn render_view(view: &SceneView<'_>, out: &mut [[u8; 4]], depth: &mut [f64])
 }
 
 /// Draws one mesh's triangles through the plain projection.
-fn draw_mesh(mesh: &Mesh, camera: &Camera, write_depth: bool, out: &mut [[u8; 4]], depth: &mut [f64]) {
+fn draw_mesh(
+    mesh: &Mesh,
+    camera: &Camera,
+    write_depth: bool,
+    out: &mut [[u8; 4]],
+    depth: &mut [f64],
+) {
     let surface = Surface {
         texture: mesh.texture.as_deref(),
         flags: mesh.texture_flags,
@@ -227,7 +238,10 @@ impl Projected {
 /// colour (r bits 0–4, g 5–9, b 10–14).
 fn project_vertex(camera: &Camera, vertex: &Vertex) -> Option<Projected> {
     let clip = camera.to_clip(vertex.position);
-    let uv = [f64::from(vertex.uv[0]) / 16.0, f64::from(vertex.uv[1]) / 16.0];
+    let uv = [
+        f64::from(vertex.uv[0]) / 16.0,
+        f64::from(vertex.uv[1]) / 16.0,
+    ];
     let color = [
         f64::from(vertex.color & 31),
         f64::from((vertex.color >> 5) & 31),
@@ -279,14 +293,24 @@ pub(crate) fn draw_triangle(
         p.swap(1, 2);
         area = -area;
     }
-    let min_x = p.iter().map(|v| v.x).fold(f64::INFINITY, f64::min).floor().max(0.0) as usize;
+    let min_x = p
+        .iter()
+        .map(|v| v.x)
+        .fold(f64::INFINITY, f64::min)
+        .floor()
+        .max(0.0) as usize;
     let max_x = p
         .iter()
         .map(|v| v.x)
         .fold(f64::NEG_INFINITY, f64::max)
         .ceil()
         .clamp(0.0, WIDTH as f64) as usize;
-    let min_y = p.iter().map(|v| v.y).fold(f64::INFINITY, f64::min).floor().max(0.0) as usize;
+    let min_y = p
+        .iter()
+        .map(|v| v.y)
+        .fold(f64::INFINITY, f64::min)
+        .floor()
+        .max(0.0) as usize;
     let max_y = p
         .iter()
         .map(|v| v.y)
@@ -488,7 +512,10 @@ mod tests {
                 assert_eq!(out[y * WIDTH + x], [255, 255, 255, alpha], "({x}, {y})");
             }
         }
-        assert!(depth[96 * WIDTH + 128].is_infinite(), "translucent writes no depth");
+        assert!(
+            depth[96 * WIDTH + 128].is_infinite(),
+            "translucent writes no depth"
+        );
     }
 
     #[test]
@@ -499,7 +526,13 @@ mod tests {
             width: 32,
             height: 32,
             pixels: (0..32 * 32)
-                .map(|i| if i / 32 < 16 { [255, 0, 0, 255] } else { [0, 255, 0, 255] })
+                .map(|i| {
+                    if i / 32 < 16 {
+                        [255, 0, 0, 255]
+                    } else {
+                        [0, 255, 0, 255]
+                    }
+                })
                 .collect(),
         };
         let meshes = [floor];
@@ -519,8 +552,16 @@ mod tests {
         // and rises 32 px from y = 96 — bottom half green, top half red.
         assert_eq!(out[95 * WIDTH + 128][..3], [0, 255, 0]);
         assert_eq!(out[70 * WIDTH + 128][..3], [255, 0, 0]);
-        assert_eq!(out[97 * WIDTH + 128][..3], [10, 20, 30], "floor below the feet");
-        assert_eq!(out[80 * WIDTH + 100][..3], [10, 20, 30], "floor beside the quad");
+        assert_eq!(
+            out[97 * WIDTH + 128][..3],
+            [10, 20, 30],
+            "floor below the feet"
+        );
+        assert_eq!(
+            out[80 * WIDTH + 100][..3],
+            [10, 20, 30],
+            "floor beside the quad"
+        );
         assert_eq!(out[80 * WIDTH + 150][..3], [10, 20, 30]);
         // The feet row is nearer than the floor there: the bias.
         let floor_depth = depth[97 * WIDTH + 128];

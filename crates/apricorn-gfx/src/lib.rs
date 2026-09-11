@@ -13,8 +13,9 @@
 //! 2D path — so the same frame hashes the same pixels in the dump CLI,
 //! the golden tests, and the harness, forever. The one documented
 //! exception is the [`field`] (3D) layer, which uses `f64` with a fixed
-//! evaluation order and no transcendental function, and is therefore
-//! bit-identical across platforms too.
+//! evaluation order and no transcendental call in its render path (the
+//! SDK's fixed-point sine table is regenerated once and pinned by
+//! SHA-1), and is therefore bit-identical across platforms too.
 
 #![deny(missing_docs)]
 
