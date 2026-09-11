@@ -60,7 +60,7 @@ pub fn player_sprite(gender: u8) -> u16 {
 }
 
 /// One camera preset.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct CameraPreset {
     /// Distance from the target, fx32.
     pub distance: i32,

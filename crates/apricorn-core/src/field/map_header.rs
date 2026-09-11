@@ -31,10 +31,11 @@ pub const MAP_NAME_SIZE: usize = 16;
 pub const NO_WILD_ENCOUNTERS: u8 = 255;
 
 /// `MapType` (`include/map_header.h:44`), the 4-bit `mapType` field.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum MapType {
     /// `MAP_TYPE_INVALID`.
+    #[default]
     Invalid = 0,
     /// `MAP_TYPE_CITY_TOWN`.
     CityTown = 1,
@@ -70,10 +71,11 @@ impl MapType {
 }
 
 /// `MAP_FOLLOWMODE_*` (`include/map_header.h:9`), the 2-bit `followMode`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum FollowMode {
     /// `MAP_FOLLOWMODE_PREVENT`.
+    #[default]
     Prevent = 0,
     /// `MAP_FOLLOWMODE_HEIGHT_RESTRICT`.
     HeightRestrict = 1,
@@ -97,7 +99,7 @@ impl FollowMode {
 }
 
 /// One decoded `MapHeader` record.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct MapHeader {
     /// `wildEncounterBank` — `a/0/3/7` member, [`NO_WILD_ENCOUNTERS`] for none.
     pub wild_encounter_bank: u8,

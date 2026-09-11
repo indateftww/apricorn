@@ -36,7 +36,7 @@ pub const BM_FIELD_ANIM_NARC: &str = "a/1/0/7";
 pub const BM_ROOM_ANIM_NARC: &str = "a/1/0/8";
 
 /// One area-data record.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct AreaData {
     /// Member index (`MapHeader::area_data_bank`).
     pub bank: u8,

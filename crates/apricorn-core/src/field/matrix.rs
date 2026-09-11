@@ -36,7 +36,7 @@ pub const ALTITUDE_UNITS: i32 = 8;
 pub const NO_LAND: u16 = 0xFFFF;
 
 /// One parsed matrix member.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MapMatrix {
     /// Member index in [`MATRIX_NARC`].
     pub id: u16,

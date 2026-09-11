@@ -195,6 +195,42 @@ fn corrupt(what: impl Into<String>, source: NdsError) -> AssetsError {
 }
 
 impl FieldScene {
+    /// A minimal scene for renderer tests: no map data, only the given
+    /// world-space `meshes`, the player billboard image, the player's
+    /// tile and a camera preset. Everything else is empty (a 0 × 0
+    /// window, no cells, props, events or scripts).
+    #[must_use]
+    pub fn synthetic(
+        map_id: u16,
+        meshes: Vec<Mesh>,
+        player: Texture,
+        position: [i32; 2],
+        camera: CameraPreset,
+    ) -> Self {
+        Self {
+            map_id,
+            name: String::new(),
+            header: MapHeader::default(),
+            matrix: MapMatrix::default(),
+            area: AreaData::default(),
+            window: CellWindow {
+                x0: 0,
+                z0: 0,
+                width: 0,
+                height: 0,
+            },
+            cells: Vec::new(),
+            props: Vec::new(),
+            meshes,
+            camera,
+            player,
+            position,
+            terrain: TerrainAttributes::new(0, 0, 0, 0),
+            events: MapEvents::default(),
+            init_scripts: InitScripts::default(),
+        }
+    }
+
     /// Loads map `map_id` with the player on tile `(x, z)`, resident cells
     /// within [`LOAD_RADIUS`] of the player's cell.
     ///

@@ -1420,6 +1420,22 @@ mod field_compositing {
     use apricorn_gfx::field::tile_position;
     use std::sync::Arc;
 
+    /// The bedroom's camera preset (ov01 preset 4) as core decodes it;
+    /// the shim renders synthetic scenes with its own indoor constant,
+    /// so this only fills the scene's data field.
+    fn bedroom_camera() -> apricorn_core::field::ov01::CameraPreset {
+        apricorn_core::field::ov01::CameraPreset {
+            distance: 0x0061_B89B,
+            angle: [0xDC82, 0, 0],
+            padding: 0,
+            perspective_type: 1,
+            fovy_angle: 0x0281,
+            near: 0x0009_6000,
+            far: 0x006C_7000,
+            look_at_offset: [0; 3],
+        }
+    }
+
     /// A synthetic field: one red ground quad, `half` world units to
     /// each side of the player's tile (0, 0), `alpha` 0–31, and an
     /// invisible (alpha 0) player texture so the shim's billboard draws
@@ -1433,9 +1449,9 @@ mod field_compositing {
             color: 0x7FFF,
         };
         let (a, b, c, d) = (corner(-h, -h), corner(h, -h), corner(h, h), corner(-h, h));
-        Arc::new(FieldScene {
-            map_id: 0,
-            meshes: vec![Mesh {
+        Arc::new(FieldScene::synthetic(
+            0,
+            vec![Mesh {
                 triangles: vec![[a, b, c], [a, c, d]],
                 texture: Some(Arc::new(Texture {
                     width: 1,
@@ -1445,13 +1461,14 @@ mod field_compositing {
                 texture_flags: 0,
                 alpha,
             }],
-            player: Texture {
+            Texture {
                 width: 1,
                 height: 1,
                 pixels: vec![[0, 0, 0, 0]],
             },
-            position: [0, 0],
-        })
+            [0, 0],
+            bedroom_camera(),
+        ))
     }
 
     /// The field (BG0, enabled) under an opaque gray BG1 (value 5
