@@ -92,7 +92,7 @@ little-endian.
 ```
 u32  frame_count
 repeat frame_count times:
-    u16  keymask       // melonDS SetKeyMask layout, bits 0..11:
+    u16  keymask       // bits 0..11, bit set = HELD:
                       // A B Select Start Right Left Up Down R L X Y
     u8   touch_down   // 0 = released
     u8   padding
@@ -101,6 +101,17 @@ repeat frame_count times:
 ```
 
 Frames beyond `frame_count` get all-zero input (boot-idle).
+
+The keymask is the harness's canonical "bit set = held" form
+(`input.rs`). melonDS's `NDS::SetKeyMask` stores its argument straight
+into the **active-low** `KEYINPUT`/`EXTKEYIN` registers (bit set =
+released; the Qt frontend starts from `0xFFF` and clears bits on press),
+so the oracle inverts at the edge: `SetKeyMask(~keymask & 0xFFF)`. The
+first oracle passed the mask through unchanged — every key held from
+power-on — and HeartGold's L+R+START+SELECT soft reset rebooted the
+game every ~220 frames (the boot RNG states returning to their zeroed
+hashes in the old `boot-idle` trace were that loop, not the title
+screen). The screenshot facility below is what exposed it.
 
 **Regions blob** (`--regions`):
 
@@ -168,6 +179,59 @@ asserted by the harness's determinism test — and a different pinned RTC
 must produce a different trace (the RTC-pin test), since HeartGold's boot
 seeds from the clock.
 
+## Screenshots (`--shots`)
+
+```
+apricorn-oracle run … --shots 120,300,305 --shots-dir out/oracle-shots/x
+```
+
+At the **end** of each listed frame — after that frame's `RunFrame`,
+after the stop check, before the region hashes, i.e. exactly the
+machine state the frame's `F` records hash — the oracle writes both
+LCDs as `<dir>/frame_%06u_top.png` and `<dir>/frame_%06u_bottom.png`:
+256×192, 8-bit RGB, no alpha. Frames at or past `--frames` are never
+written (a warning on stderr). The trace is **byte-identical** with or
+without `--shots` (asserted by `oracle_hg.rs`); the PNGs are review
+artifacts — ground truth for comparing engine renders — and live under
+`out/` (gitignored), never in the corpus.
+
+Where the pixels come from (verified in `GPU2D_Soft.cpp`'s final pass,
+melonDS 1.1): the software renderer leaves a completed frame in
+`GPU.Framebuffer[GPU.FrontBuffer][0 = top, 1 = bottom]` as `0xFFRRGGBB`
+words — the DS's 6-bit channels expanded to 8 with the top two bits
+replicated into the bottom two, red in bits 16–23, green 8–15, blue 0–7,
+alpha `0xFF` ("BGRA" only as a little-endian byte order).
+`FrontBuffer` flips at every `FinishFrame`, so after `RunFrame` it
+indexes the frame just finished — the same buffer the Qt frontend
+displays. `Framebuffer[..][0]` is always the *top* LCD:
+`AssignFramebuffers` routes the two engines by `POWCNT1`'s display
+swap, so the file names follow the physical screens, not engines A/B.
+
+The core-only build does not link zlib, so the encoder in
+`apricorn-oracle.cpp` is self-contained: signature, `IHDR`, one `IDAT`
+holding a zlib stream of **stored** (uncompressed) deflate blocks —
+header `78 01`, ≤65535-byte blocks with `LEN`/`NLEN`, Adler-32 trailer —
+and `IEND`, each chunk CRC-32'd. Every row carries filter type 0.
+147,726 bytes per LCD.
+
+Rust side: [`oracle::ShotRequest`] (`frames` + `dir`) passed to
+`OracleRun::run_with_shots` / `Case::run_oracle_with_shots`; the
+directory is created first. `apricorn-replay --shots FRAMES --shots-dir
+DIR <case>` exposes it on the command line — `FRAMES` is a comma list
+of frame indices or inclusive `first-last` ranges (`120,300-305`),
+expanded before the oracle sees it. `scripts/shots.ps1` wraps that.
+`APRICORN_ORACLE=<path>` overrides the `out/oracle` lookup, so a
+scratch build (`cmake -B out/oracle-dev …`) can be driven through the
+harness before it replaces the shared binary.
+
+The worked example is `corpus/new-game` — power-on to the bedroom on
+the retail ROM, authored entirely from screenshots: coarse `--shots`
+scans (every 10–20 frames) located each screen, per-frame scans pinned
+every transition, and the input was extended one step at a time until
+the bedroom's first fully-faded-in frame. Its `README.md` records every
+milestone frame with the exact input events, and the review set it
+names is the visual ground truth for the engine's new-game path.
+
 ## Usage
 
 ```
@@ -175,7 +239,10 @@ apricorn-oracle run --rom hg_usa.nds --out trace.txt
     --regions regions.bin [--input input.bin] [--probes probes.bin]
     [--frames 600] [--rtc 2010-03-01T09:00:00]
     --input-sha1 HEX --regions-sha1 HEX [--producer oracle-melonds-1.1]
+    [--shots F,F,... --shots-dir DIR]
 ```
 
-Exit 0 on success, 2 on runtime failure (bad blob, unreadable ROM), 3 when
-the machine stopped before the requested frame count, 64 on usage errors.
+Exit 0 on success, 2 on runtime failure (bad blob, unreadable ROM,
+unwritable screenshot), 3 when the machine stopped before the requested
+frame count, 64 on usage errors (including `--shots` without
+`--shots-dir` or a malformed frame list).

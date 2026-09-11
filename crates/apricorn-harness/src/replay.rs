@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 use crate::HarnessError;
 use crate::input::InputScript;
-use crate::oracle::{OracleRun, ProbeSpec};
+use crate::oracle::{OracleRun, ProbeSpec, ShotRequest};
 use crate::pins::{PinMode, PinTable};
 use crate::regions::RegionSet;
 use crate::trace::Trace;
@@ -86,12 +86,8 @@ impl Case {
         self.script.rtc.as_deref()
     }
 
-    /// Replays the case on the oracle and parses the trace it produces.
-    ///
-    /// # Errors
-    /// Propagates [`crate::oracle::OracleRun::run`]'s errors (binary
-    /// missing, nonzero exit, malformed trace).
-    pub fn run_oracle(&self, rom: &Path) -> Result<Trace, HarnessError> {
+    /// The case's oracle invocation on `rom`.
+    fn oracle_run<'a>(&'a self, rom: &'a Path) -> OracleRun<'a> {
         OracleRun {
             rom,
             regions: &self.regions,
@@ -101,7 +97,29 @@ impl Case {
             rtc: self.rtc(),
             producer: None,
         }
-        .run()
+    }
+
+    /// Replays the case on the oracle and parses the trace it produces.
+    ///
+    /// # Errors
+    /// Propagates [`crate::oracle::OracleRun::run`]'s errors (binary
+    /// missing, nonzero exit, malformed trace).
+    pub fn run_oracle(&self, rom: &Path) -> Result<Trace, HarnessError> {
+        self.oracle_run(rom).run()
+    }
+
+    /// [`run_oracle`](Self::run_oracle), also writing the screenshots
+    /// `shots` asks for — the same trace, plus PNGs of both LCDs at the
+    /// listed frames for visual review against engine renders.
+    ///
+    /// # Errors
+    /// Propagates [`crate::oracle::OracleRun::run_with_shots`]'s errors.
+    pub fn run_oracle_with_shots(
+        &self,
+        rom: &Path,
+        shots: &ShotRequest,
+    ) -> Result<Trace, HarnessError> {
+        self.oracle_run(rom).run_with_shots(shots)
     }
 
     /// The case's committed expected trace, if present.

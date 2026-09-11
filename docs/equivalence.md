@@ -54,6 +54,20 @@ comparator; and `corpus/boot-idle` replays EQUIVALENT through
 `scripts/replay.ps1` (a different pinned RTC diverges at frame 185,
 `sLCRNG_State`, with both hashes printed).
 
+The `boot-idle` baseline was regenerated after the oracle's key-mask
+polarity fix (`docs/oracle.md`, "Input blobs"): the first oracle held
+every key from power-on, so the trace it committed was HeartGold's
+L+R+START+SELECT soft-reset loop (the LCRNG re-seeded at 185, 407,
+629, …; bss re-zeroed at 243, 465, …), never the intro. The corrected
+baseline seeds `sLCRNG_State` once, at frame 185, sees it zeroed at 186
+(the intro movie parks the seed until it exits) and never touched again
+through frame 599; `sMTRNG_State` changes at 150 and 210 only. Phase 4
+adds `corpus/new-game` (its README lists every milestone frame): the
+same regions through the whole new-game flow to the bedroom, 5000
+frames, with the LCRNG restored at 1002 (intro skipped), re-seeded at
+1480 (new-game init) and 4727 (post-Oak), and both LCDs verified by
+oracle screenshots at each step.
+
 ## The formats
 
 All formats are line-oriented text: the C++ oracle emits them with
@@ -169,5 +183,9 @@ oracle binary is missing.
 Cases skip silently when the ROM (or oracle binary)
 is absent, so ROM-less CI stays green — the same convention as
 apricorn-core's `*_hg` tests. The corpus grows with the phases:
-boot-idle (Phase 2), title screen (Phase 3), new-game flow (Phase 4),
-map walks (Phase 5), battles (Phase 6), long-play scripts (Phase 8).
+boot-idle (Phase 2) and new-game (Phase 4, power-on to the bedroom)
+are committed; map walks (Phase 5), battles (Phase 6) and long-play
+scripts (Phase 8) follow. `apricorn-replay --shots FRAMES --shots-dir
+DIR <case>` (or `scripts/shots.ps1`) writes both LCDs as PNGs at the
+listed frames while replaying — the ground truth every new case is
+authored and reviewed against (`docs/oracle.md`, "Screenshots").
