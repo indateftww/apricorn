@@ -258,6 +258,22 @@ Parallel workstreams (2026-09-11 →): each lands as its own reviewed
 branch with ROM-gated tests, then the orchestrator wires them into
 `app::game`. Sub-items are checked when merged, not when started.
 
+**Status 2026-09-11 (midday):** the foundations are merged and green
+(data layer, 3D field rendering, movement machine, script VM core, start
+menu, day/night model, engine runner, oracle screenshots). The bedroom is
+still a frozen frame in `app::game`: the **field system integration** —
+the per-frame loop that moves the player against the terrain, follows
+with the camera, animates the map-object billboard and runs the
+stairs/door warps (bedroom ↔ house 1F ↔ New Bark Town) — is in progress
+on its own branch (`field::system`, `docs/field-system.md`) and is the
+next objective to finish before stopping to assess. After it: NPC objects
+and the script host (dialogue boxes, init scripts, mom's cutscene), the
+start-menu/day-night hookups, then the user's regression test of Phase 5.
+The text-box "defects" seen in engine screenshots (page-wait boxes, grey
+right column) were measured against retail frames and are retail
+behavior; they are pinned by tests now (`docs/game-flow.md`). Phase 6.1
+(Pokémon data) and Phase 7 (audio) have partial branches parked unmerged.
+
 - [ ] Map engine: HGSS's map/BG layers, collision, warp/door transitions,
       camera.
       - [x] Field data layer: map headers (ARM9 table, pinned), matrices,
@@ -271,7 +287,11 @@ branch with ROM-gated tests, then the orchestrator wires them into
             and orthographic, SDK fixed-point angles), prop transforms,
             map-object billboards with the original projection shear.
             → `apricorn-gfx::field`, `docs/gfx.md`
-      - [ ] Warps/doors and the map-load manager's cell windowing.
+      - [ ] Field system integration (in progress): the live per-frame
+            field in `app::game`, warps/doors between maps, the camera
+            follow, the animated player billboard, and the 3 × 3 cell
+            window of `FieldScene::load`. → `field::system`,
+            `docs/field-system.md`
 - [ ] Player movement (grid + HGSS's smooth sub-tile animation), running shoes,
       bicycle.
       - [x] Movement command machine (113 commands; linear steps at
