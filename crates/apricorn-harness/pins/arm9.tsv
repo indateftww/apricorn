@@ -122,3 +122,22 @@ sub_0205DE64	thumb	0x0205DE64	36	7f750a022fc3529f68a12f8015dc7c00d917d185	pret a
 sub_0205D450	thumb	0x0205D450	68	10de49879bd68d1cd565cf251448af13ebee0fb0	pret asm/unk_0205CB48.s:1169 (label line; prologue matched)
 PlayerAvatar_UpdateMovement	thumb	0x0205CE68	220	a5f6ee36c82f79a96dea98895dd826d808bff95c	pret asm/unk_0205CB48.s:401 (label line; prologue matched)
 gMovementCmdTable	data	0x020FD2D8	452	35506a46ad66df84dadc3a4ae43bbc69be2c01d6	pool _0206246C @ 0x0206246C in MapObject_RunMovementCommand; 113 step-array pointers
+
+# Day/night (Phase 5) - see docs/day-night.md. gf_rtc.c's leaves were located by a
+# byte scan for sTimeOfDayByHour {4,4,4,4, 0x6, 1x7, 2,2,2, 3,3,3,3} and the one
+# literal pool naming it, then decoded outward along the bl chain; the SDK's RTC
+# converters carry real addresses in pret's lib/asm/nitro.s. sRTCWork is the .bss
+# work struct the cache readers use (time +0x20, frozenTimeState +0x48, frozenTime +0x4C).
+
+GF_RTC_TimeToSec	thumb	0x020147A4	44	58e98f7551b825037509632795d0d8a61d19feb6	pool 0x021D1048 @ 0x020147D0 (sRTCWork), decoded back from IsNighttime
+IsNighttime	thumb	0x02014804	22	17309152fc9ef9d6e3649e6de89a25c1332e30cd	bl GF_RTC_GetTimeOfDay @ 0x02014806
+GF_RTC_GetTimeOfDay	thumb	0x0201481C	20	d42c2d1d55edae63d945dee42a82ae30c427f4fa	bl GF_RTC_GetTimeOfDayByHour @ 0x02014828
+GF_RTC_GetTimeOfDayWildParam	thumb	0x02014830	20	272ebfd14da4ab28e6c9f48b19cbcd7cefe972f2	bl GF_RTC_GetTimeOfDayWildParamByHour @ 0x0201483C
+GF_RTC_GetTimeOfDayByHour	thumb	0x02014844	24	9cd185e09fd746d8958ca8ed0b54d3f005158db2	pool 0x020F6060 @ 0x02014858 (sTimeOfDayByHour byte scan)
+GF_RTC_GetTimeOfDayWildParamByHour	thumb	0x0201485C	30	57aec745de4855082a3bd661c6f196d1ce1574a8	bl GF_RTC_GetTimeOfDayByHour @ 0x0201485E
+RTC_ConvertDateToDay	arm	0x020DC284	148	eee002a367e1de11983ac9fe3a67627f76d97ab8	pret lib/asm/nitro.s:9145
+RTCi_ConvertTimeToSecond	arm	0x020DC318	24	c41343279908e0cd82cac0b4d71260aac2e7f1ea	pret lib/asm/nitro.s:9190
+RTC_ConvertDateTimeToSecond	arm	0x020DC330	100	9db132fe9c191d4726bbe7f3cf9c0a017e689c61	pret lib/asm/nitro.s:9200
+sTimeOfDayByHour	data	0x020F6060	24	6833316957b380955f79690cb9d3f84c46ef254c	byte scan: gf_rtc.c's 24-entry hour-bucket table (.rodata)
+sGF_DaysPerMonth	data	0x020F6048	24	353211f3e8b8ff08ecd5608cb95b9c5a7a03226c	byte scan: gf_rtc.c's cumulative-days table; no code reference (GF_RTC_GetDayOfYear is unused)
+sRTCWork	data	0x021D1048	88	e129f27c5103bc5cc44bcdf0a15e160d445066ff	.bss (past image end; zeroed at load)
