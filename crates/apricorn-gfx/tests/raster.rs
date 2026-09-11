@@ -1389,6 +1389,137 @@ fn dialogue_border_uses_all_eighteen_tiles_and_arrow_keeps_border_palette() {
     );
 }
 
+/// The dialogue box's extents, pinned against pret's geometry after a
+/// retail comparison that questioned them (`docs/game-flow.md`,
+/// "Rendering fixes"):
+///
+/// * the interior fill spans exactly `width` tiles — `sub_0200E6B4`
+///   (`render_window.s`) then writes three border columns to its
+///   right (`x+width`, `+1`, `+2`: tiles `+3/+4/+5`, `+9/+10/+11`,
+///   `+15/+16/+17`) and two to its left. The dark band inside the
+///   retail box's right end *is* border art (`+10`/`+11`), not a fill
+///   shortfall, so the fill must stop at the interior's edge;
+/// * `TextPrinter_DrawDownArrow` (`render_text.c:395-449`) lands its
+///   2×2 block on columns `x+width+1..+2`, rows `y+height-2..-1` —
+///   over `+10`/`+11` — from tiles `base+18 + {0,1,2,1}[index]·4 +
+///   pos`, keeping the border's palette bank (`0x10`); index 3 is
+///   index 1's tiles;
+/// * `RenderScreenFocusIndicatorTile` (`text.c:296-306`) blits the
+///   `{YESNO}` screen-focus icon *inside* the buffer at
+///   `(width-3)·8` — it never reaches the border or the arrow block.
+#[test]
+fn dialogue_fill_border_arrow_and_focus_extents_follow_pret() {
+    let mut store = FixtureStore::new();
+    // Frame tiles: tile n uniform value n % 15 + 1 (bank 4 → 64 + v).
+    let frame_tiles = store.add_tiles(
+        0,
+        &(0..30)
+            .flat_map(|n| [(n % 15 + 1) as u8; 64])
+            .collect::<Vec<_>>(),
+    );
+    // The focus NCGR: four 12-tile frames, tile i uniform i % 16 + 1
+    // shifted so no tile is the colorKey 0 (values 1..=15, then 1).
+    let focus_gfx = store.add_tiles(
+        0,
+        &(0..48)
+            .flat_map(|i| [(i % 15 + 1) as u8; 64])
+            .collect::<Vec<_>>(),
+    );
+    let palette = store.add_palette(true, &gray_palette(96));
+    let mut frame = LogicalFrame::default();
+    frame.main.bgs[0].enabled = true;
+    frame.main.char_blocks[0].push(place(frame_tiles));
+    frame.main.palette_loads.push(load_palette(palette));
+    // sWindowTemplate_DialogMsg's shape (27×4 at (2, 19)) scaled to
+    // 5×4 at (2, 2): interior pixels (16..56, 16..48).
+    frame.main.windows.push(Window {
+        left: 2,
+        top: 2,
+        width: 5,
+        height: 4,
+        palette: 2,
+        fill: 15,
+        frame: Some(WindowFrame {
+            base_tile: 0,
+            palette: 4,
+            dialogue: true,
+        }),
+        ..Window::default()
+    });
+    let [plain, _] = render(&frame, &store);
+    let v = |screen: &ScreenBuffer, x: usize, y: usize| screen.pixel(x, y)[0];
+    let border = |tile: u8| 64 + (tile % 15 + 1);
+    for y in 16..48 {
+        // Two left columns, the fill across exactly width·8 pixels,
+        // then the three right columns and the backdrop.
+        assert_eq!(v(&plain, 0, y), border(6), "row {y}: column +6");
+        assert_eq!(v(&plain, 8, y), border(7), "row {y}: column +7");
+        for x in 16..56 {
+            assert_eq!(v(&plain, x, y), 47, "({x}, {y}): the fill, bank 2");
+        }
+        assert_eq!(v(&plain, 56, y), border(9), "row {y}: column +9 starts at the fill's edge");
+        assert_eq!(v(&plain, 64, y), border(10), "row {y}: column +10");
+        assert_eq!(v(&plain, 72, y), border(11), "row {y}: column +11");
+        assert_eq!(v(&plain, 80, y), 0, "row {y}: nothing past the third column");
+    }
+    for (x, column) in [(0, 0), (8, 1), (16, 2), (48, 2), (56, 3), (64, 4), (72, 5)] {
+        assert_eq!(v(&plain, x, 8), border(column), "top row column {column}");
+        assert_eq!(v(&plain, x, 48), border(12 + column), "bottom row column {column}");
+    }
+
+    // The arrow block: tiles (8..10, 4..6) → pixels (64..80, 32..48).
+    let mut renders = Vec::new();
+    for index in 0..4u8 {
+        frame.main.windows[0].arrow = Some(WindowArrow {
+            base_tile: 0,
+            index,
+        });
+        let [main, _] = render(&frame, &store);
+        let offset = ARROW_TILE_OFFSETS[usize::from(index)];
+        for (pos, (x, y)) in [(64, 32), (72, 32), (64, 40), (72, 40)].into_iter().enumerate() {
+            assert_eq!(
+                v(&main, x, y),
+                border(18 + offset * 4 + pos as u8),
+                "index {index} pos {pos}: tile 18 + {offset}·4 + {pos} at the border's bank"
+            );
+        }
+        // Only those four tiles change: the column above the block
+        // and the +9 column beside it are still border.
+        assert_eq!(v(&main, 64, 24), border(10), "index {index}: +10 above the block");
+        assert_eq!(v(&main, 56, 40), border(9), "index {index}: +9 beside the block");
+        assert_eq!(v(&main, 80, 40), 0, "index {index}: nothing past the block");
+        renders.push(main);
+    }
+    assert_eq!(
+        renders[3].as_rgba(),
+        renders[1].as_rgba(),
+        "index 3 walks back through offset 1: identical to index 1"
+    );
+    assert_ne!(renders[0].as_rgba(), renders[1].as_rgba());
+    assert_ne!(renders[1].as_rgba(), renders[2].as_rgba());
+
+    // The focus icon lands at window x (5-3)·8 = 16 → screen 32..56,
+    // rows 16..48: inside the fill, up to but not over the border.
+    frame.main.windows[0].focus = Some(WindowFocus {
+        asset: focus_gfx,
+        index: 1,
+        scroll: 0,
+    });
+    let [main, _] = render(&frame, &store);
+    let focus_tile = |t: u8| 32 + (t % 15 + 1); // bank 2
+    assert_eq!(v(&main, 31, 16), 47, "left of the icon: the fill");
+    assert_eq!(v(&main, 32, 16), focus_tile(12), "frame 1's tile 0");
+    assert_eq!(v(&main, 55, 47), focus_tile(23), "frame 1's tile 11 ends at the fill's edge");
+    assert_eq!(v(&main, 56, 16), border(9), "the border past the icon is untouched");
+    for (pos, (x, y)) in [(64, 32), (72, 32), (64, 40), (72, 40)].into_iter().enumerate() {
+        assert_eq!(
+            v(&main, x, y),
+            border(18 + ARROW_TILE_OFFSETS[3] * 4 + pos as u8),
+            "the arrow block coexists with the icon"
+        );
+    }
+}
+
 #[test]
 fn blend_brightness_only_changes_the_displayed_target_plane() {
     let mut store = FixtureStore::new();
