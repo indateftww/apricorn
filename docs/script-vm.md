@@ -146,7 +146,7 @@ ROM-gated runs drive one code path.
 
 ## The command subset
 
-`exec::execute` implements 146 of the 853 commands: the opcode
+`exec::execute` implements 155 of the 853 commands: the opcode
 inventory of the early-game banks (below) plus the trivial neighbours
 of the control-flow, flag, variable, message and BGM families.
 Everything else returns `ScriptError::Unimplemented { opcode, offset }`
@@ -182,7 +182,7 @@ Town), 843 (Elm's lab 1F), 845 (player's house 1F), 846 (bedroom),
 225 (Route 29) and the eight `std_misc` scripts they `CallStd` (entries
 0, 8, 9, 29, 30, 33, 36, 38) and pins each bank's `(opcode, count)`
 histogram, script count, reachable-instruction count and movement-list
-count. All 108 distinct opcodes those banks use have handlers. By
+count. All 126 distinct opcodes those banks use have handlers. By
 family: control flow (End, Wait, Compare*, CallStd,
 RestartCurrentScript, GoTo, Call, Return, GoToIf, CallIf), flags and
 variables (Set/Clear/CheckFlag, AddVar, SetVar, CopyVar), the dialogue
