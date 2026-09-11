@@ -616,6 +616,17 @@ impl Collision for SceneTerrain<'_> {
     }
 }
 
+/// A warp whose destination map failed to load (`change_map`): the
+/// transition is abandoned on the current map instead of unwinding
+/// the game, and the failure is reported here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MapLoadError {
+    /// The destination that failed.
+    pub destination: Location,
+    /// The asset error's message.
+    pub message: String,
+}
+
 // ---------------------------------------------------------------------------
 // Map transitions
 // ---------------------------------------------------------------------------
@@ -778,6 +789,7 @@ pub struct FieldSystem {
     last_input: Option<FieldInput>,
     last_outcome: Option<MoveOutcome>,
     last_event: Option<FieldEvent>,
+    last_error: Option<MapLoadError>,
     ticks: u32,
     frame: LogicalFrame,
 }
@@ -828,6 +840,7 @@ impl FieldSystem {
             last_input: None,
             last_outcome: None,
             last_event: None,
+            last_error: None,
             ticks: 0,
             frame: LogicalFrame::default(),
         };
@@ -1003,6 +1016,13 @@ impl FieldSystem {
         self.last_event
     }
 
+    /// The last warp whose destination failed to load, if any: the
+    /// field abandoned that transition and kept the current map.
+    #[must_use]
+    pub fn last_error(&self) -> Option<&MapLoadError> {
+        self.last_error.as_ref()
+    }
+
     /// The step counters the encounter check reads.
     #[must_use]
     pub fn encounter_steps(&self) -> EncounterSteps {
@@ -1148,7 +1168,22 @@ impl FieldSystem {
                 }
                 if t.tick == fade_out + Transition::LOAD_AFTER_FADE_TICKS && !t.loaded {
                     t.stage = TransitionStage::Black;
-                    self.change_map(store, t.destination, t.kind);
+                    if let Err(error) = self.change_map(store, t.destination, t.kind) {
+                        // No retail counterpart (a missing member is a
+                        // broken ROM there): the transition is
+                        // abandoned, the current map fades back in and
+                        // the player stays put; `last_error` reports it.
+                        self.last_error = Some(MapLoadError {
+                            destination: t.destination,
+                            message: error.to_string(),
+                        });
+                        self.avatar.object.clear_held_movement_if_idle();
+                        self.fade
+                            .begin(FadeDirection::In, FieldFade::STEPS, FieldFade::FRAMES_PER_STEP);
+                        self.transition = None;
+                        self.phase = FieldPhase::Running;
+                        return;
+                    }
                     t.loaded = true;
                 }
                 if t.tick == fade_in {
@@ -1184,10 +1219,18 @@ impl FieldSystem {
     /// then the enter routine's placement for stairs (`sub_02056AEC`,
     /// `asm/unk_02056680.s:563`): one tile into the wall behind the
     /// stairs, facing back toward them.
-    fn change_map(&mut self, store: &AssetStore, destination: Location, kind: TransitionKind) {
+    ///
+    /// # Errors
+    /// Returns the [`AssetsError`] of a destination that fails to load,
+    /// with the field unchanged.
+    fn change_map(
+        &mut self,
+        store: &AssetStore,
+        destination: Location,
+        kind: TransitionKind,
+    ) -> Result<(), AssetsError> {
+        let (scene, location) = Self::load_location(store, destination, self.gender)?;
         self.previous = self.location;
-        let (scene, location) = Self::load_location(store, destination, self.gender)
-            .expect("the pinned ROM's destination map loads");
         self.camera = scene.camera;
         self.scene = Arc::new(scene);
         let mut location = location;
@@ -1228,6 +1271,7 @@ impl FieldSystem {
         self.location = location;
         // sub_02053038: the step counters restart on a map change.
         self.encounter_steps.reset();
+        Ok(())
     }
 
     /// The frame for this tick: engine A's BG0 bound to the field at
@@ -1292,6 +1336,30 @@ impl FieldSystem {
         self.phase = FieldPhase::Transition;
         self.task_tick = 0;
         FieldEvent::Warp(transition.kind)
+    }
+
+    /// A transition started from outside the input path — the seam for
+    /// scripted warps (`sub_02055CD8` from a script's warp command):
+    /// `destination` as `FieldSystem_MapConnection` would have built it,
+    /// the routine pair `kind`. Runs the same schedule as a warp tile;
+    /// refused (`false`) while movement is not allowed. The avatar
+    /// stops as it does for a warp event (`sub_0205CF44`).
+    pub fn warp(&mut self, destination: Location, kind: TransitionKind) -> bool {
+        if !self.movement_allowed() {
+            return false;
+        }
+        self.avatar.move_state = AvatarMoveState::None;
+        self.avatar.player_move_state = PlayerMoveState::None;
+        self.avatar.clear_gear_and_flag2();
+        let event = self.start_transition(Transition {
+            kind,
+            destination,
+            tick: 0,
+            stage: TransitionStage::Exit,
+            loaded: false,
+        });
+        self.last_event = Some(event);
+        true
     }
 
     /// `FieldSystem_MapConnection` (`:909`): the warp event on tile

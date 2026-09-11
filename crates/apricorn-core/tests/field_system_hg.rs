@@ -502,3 +502,39 @@ fn the_player_stands_at_the_bdhc_ground_height() {
     assert_eq!(view.camera_target, [at(695, 397).x, 16 * FX32_ONE, at(695, 397).z]);
     assert_eq!(view.objects[0].world_pos[1], 16 * FX32_ONE);
 }
+
+#[test]
+fn a_warp_whose_map_fails_to_load_is_abandoned_on_the_current_map() {
+    let Some(store) = open_rom() else {
+        return;
+    };
+    let mut field = bedroom(&store);
+    let bogus = Location::new(0xFFFF, 0, 0, 0, Direction::South);
+    assert!(field.warp(bogus, TransitionKind::Entrance));
+    assert_eq!(field.last_event(), Some(FieldEvent::Warp(TransitionKind::Entrance)));
+    assert!(!field.movement_allowed());
+    let t = field.transition().unwrap();
+    let load_tick = t.fade_out_tick() + Transition::LOAD_AFTER_FADE_TICKS;
+    // Started between ticks, the task's tick 0 runs on the next call:
+    // the load (and the failure) comes at the (load_tick + 1)-th.
+    let mut ticks = 0;
+    while field.transition().is_some() {
+        field.tick(Input::default(), &store);
+        ticks += 1;
+        assert!(ticks <= load_tick + 1, "the transition ends at the failed load");
+    }
+    assert_eq!(ticks, load_tick + 1);
+    assert_eq!(field.phase(), FieldPhase::Running);
+    assert!(field.movement_allowed());
+    assert_eq!(field.scene().map_id, 64);
+    assert_eq!(field.location(), Location::PLAYER_ROOM);
+    assert_eq!(tile(&field), (6, 6));
+    let error = field.last_error().expect("the failure is reported");
+    assert_eq!(error.destination, bogus);
+    assert!(error.message.contains("65535"), "{}", error.message);
+    // The current map fades back in.
+    for _ in 0..8 {
+        field.tick(Input::default(), &store);
+    }
+    assert_eq!(field.frame().main.brightness, MasterBrightness::default());
+}
