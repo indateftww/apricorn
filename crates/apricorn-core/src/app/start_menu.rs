@@ -679,9 +679,11 @@ pub struct StartMenu {
     pressed_pending: bool,
     /// The task state.
     state: State,
-    /// The keys held on the previous tick, for press edges.
+    /// The keys held on the previous tick (the opening frame's at
+    /// first), for `gSystem.newKeys` edges.
     prev_keys: Keys,
-    /// Whether the stylus was down on the previous tick.
+    /// Whether the stylus was down on the previous tick (the opening
+    /// frame's at first), for the new-touch test.
     prev_touch: bool,
 }
 
@@ -696,6 +698,19 @@ impl StartMenu {
     /// BG3's bar, the cursor sprite, and replaces the sub engine with
     /// the grid; [`StartMenuEvent::Closed`] restores it.
     ///
+    /// `input` is the input of the frame that opened the menu — the
+    /// field's X press (`field_control.c:303-306`), or whatever the
+    /// caller's opener read. The menu reads `gSystem.newKeys` edges,
+    /// and that register is global: the X that opened the menu was
+    /// the field's edge, so on the task's first `HANDLE_INPUT` pass
+    /// (`start_menu.c:338-352` — `INIT` sets the state and breaks;
+    /// the keys are read a frame later) a still-held X, B, or A is
+    /// *not* new. The open seeds the edge state from this input so
+    /// the same holds here: a button held across the open closes or
+    /// picks nothing until it is released and pressed again, and a
+    /// stylus already down is not a new touch
+    /// (`TouchscreenHitbox_FindRectAtTouchNew`).
+    ///
     /// # Errors
     /// Returns the store's [`AssetsError`] when a member is missing or
     /// corrupt — unreachable in practice against the pinned dump.
@@ -703,6 +718,7 @@ impl StartMenu {
         store: &Mutex<AssetStore>,
         host: &dyn StartMenuHost,
         base: &LogicalFrame,
+        input: Input,
     ) -> Result<Self, AssetsError> {
         let inhibit = if host.safari_active() {
             inhibit_safari()
@@ -715,11 +731,12 @@ impl StartMenu {
         } else {
             inhibit_normal(host)
         };
-        Self::open_with(store, host, base, inhibit, false)
+        Self::open_with(store, host, base, input, inhibit, false)
     }
 
     /// `sub_0203BD20` (`:246`) — the colosseum open: `sub_0203BEE8`'s
-    /// mask (no dex, save, easy chat, retire, or gear).
+    /// mask (no dex, save, easy chat, retire, or gear). `input` as
+    /// [`Self::open`].
     ///
     /// # Errors
     /// As [`Self::open`].
@@ -727,13 +744,15 @@ impl StartMenu {
         store: &Mutex<AssetStore>,
         host: &dyn StartMenuHost,
         base: &LogicalFrame,
+        input: Input,
     ) -> Result<Self, AssetsError> {
-        Self::open_with(store, host, base, inhibit_colosseum(), false)
+        Self::open_with(store, host, base, input, inhibit_colosseum(), false)
     }
 
     /// `sub_0203BCDC` (`:236`) — the union-room open: `sub_0203BEE0`'s
     /// mask (no save or retire) with `unk_350` set, so the gear slot
-    /// carries the LOG (`START_MENU_ACTION_12`).
+    /// carries the LOG (`START_MENU_ACTION_12`). `input` as
+    /// [`Self::open`].
     ///
     /// # Errors
     /// As [`Self::open`].
@@ -741,14 +760,16 @@ impl StartMenu {
         store: &Mutex<AssetStore>,
         host: &dyn StartMenuHost,
         base: &LogicalFrame,
+        input: Input,
     ) -> Result<Self, AssetsError> {
-        Self::open_with(store, host, base, inhibit_union(), true)
+        Self::open_with(store, host, base, input, inhibit_union(), true)
     }
 
     fn open_with(
         store: &Mutex<AssetStore>,
         host: &dyn StartMenuHost,
         base: &LogicalFrame,
+        input: Input,
         inhibit: u32,
         unk_350: bool,
     ) -> Result<Self, AssetsError> {
@@ -907,8 +928,11 @@ impl StartMenu {
             input_touch_mode: false,
             pressed_pending: false,
             state: State::HandleInput,
-            prev_keys: Keys::IDLE,
-            prev_touch: false,
+            // gSystem.newKeys is global: the buttons and stylus the
+            // opening frame already saw are held, not new, on the
+            // first HANDLE_INPUT pass.
+            prev_keys: input.keys,
+            prev_touch: input.touch.is_some(),
         };
         // ov27_02259F80:122-131 — the cursor from the field's unkD3,
         // then ov27_0225C1EC's fallback to the first visible slot.

@@ -89,6 +89,13 @@ fn full_host(gender: u8) -> Host {
     }
 }
 
+/// The field's X press that opens the menu — the opening frame's input,
+/// which seeds the menu's `gSystem.newKeys` edge state.
+const X_PRESS: Input = Input {
+    keys: Keys(key::X),
+    touch: None,
+};
+
 fn tick(menu: &mut StartMenu, index: u32, keys: u16, host: &dyn StartMenuHost) -> StartMenuEvent {
     menu.tick(
         apricorn_core::Frame { index },
@@ -112,7 +119,7 @@ fn opened_menu_over_black_pins_both_screens() {
 
     // The full grid, male BAG: the first frame after the open pass.
     let host = full_host(0);
-    let menu = StartMenu::open(&store, &host, &base).unwrap();
+    let menu = StartMenu::open(&store, &host, &base, X_PRESS).unwrap();
     let screens = render(menu.frame(), &*store.lock().unwrap());
     save_screens("start-menu-full-open.png", &screens);
     // The top screen: black field, the bar along the bottom rows only.
@@ -149,7 +156,7 @@ fn opened_menu_over_black_pins_both_screens() {
         ],
         gender: 1,
     };
-    let menu = StartMenu::open(&store, &after_mom, &base).unwrap();
+    let menu = StartMenu::open(&store, &after_mom, &base, X_PRESS).unwrap();
     assert_eq!(
         menu.selected_slot(),
         Some(2),
@@ -165,7 +172,7 @@ fn opened_menu_over_black_pins_both_screens() {
         flags: Vec::new(),
         gender: 0,
     };
-    let menu = StartMenu::open(&store, &fresh, &base).unwrap();
+    let menu = StartMenu::open(&store, &fresh, &base, X_PRESS).unwrap();
     assert_eq!(menu.selected_slot(), None);
     assert!(menu.frame().sub.sprites.is_empty());
     assert!(menu.frame().sub.windows.is_empty());
@@ -193,7 +200,7 @@ fn cursor_walk_moves_the_highlight_and_close_restores_the_base() {
     let store = Mutex::new(AssetStore::open(path).unwrap());
     let base = LogicalFrame::default();
     let host = full_host(1);
-    let mut menu = StartMenu::open(&store, &host, &base).unwrap();
+    let mut menu = StartMenu::open(&store, &host, &base, X_PRESS).unwrap();
     let opened = render(menu.frame(), &*store.lock().unwrap());
     assert_eq!(tick(&mut menu, 1, key::DOWN, &host), StartMenuEvent::None);
     assert_eq!(menu.selected_slot(), Some(1));

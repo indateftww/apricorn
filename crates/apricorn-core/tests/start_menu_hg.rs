@@ -94,6 +94,14 @@ const FULL: [u16; 7] = [
     flag::GOT_OPTIONS_BUTTON,
 ];
 
+/// The field's X press that opens the menu (`field_control.c:303-306`)
+/// — the input of the opening frame, which seeds the menu's edge state
+/// the way the global `gSystem.newKeys` does.
+const X_PRESS: Input = Input {
+    keys: Keys(key::X),
+    touch: None,
+};
+
 /// One inputless tick.
 fn idle(menu: &mut StartMenu, host: &dyn StartMenuHost) -> StartMenuEvent {
     menu.tick(apricorn_core::Frame { index: 0 }, Input::default(), host)
@@ -151,7 +159,7 @@ fn a_fresh_save_lists_the_three_default_entries_but_draws_no_icon() {
     let Some(store) = store() else { return };
     let host = Host::new(&[]);
     let base = LogicalFrame::default();
-    let menu = StartMenu::open(&store, &host, &base).unwrap();
+    let menu = StartMenu::open(&store, &host, &base, X_PRESS).unwrap();
     // StartMenu_BuildActionLists over the normal mask: TRAINER CARD,
     // SAVE, OPTIONS, EXIT in order, then 9 and 10 into display slots 7/8.
     assert_eq!(
@@ -201,7 +209,7 @@ fn after_moms_gifts_the_four_icons_light_and_the_walk_wraps_the_right_column() {
     let Some(store) = store() else { return };
     let host = Host::new(&AFTER_MOM);
     let base = LogicalFrame::default();
-    let mut menu = StartMenu::open(&store, &host, &base).unwrap();
+    let mut menu = StartMenu::open(&store, &host, &base, X_PRESS).unwrap();
     // Layout row 0: slot 2 BAG, 4 TRAINER CARD, 5 SAVE, 6 OPTIONS lit.
     let visible: Vec<usize> = menu
         .grid()
@@ -286,7 +294,7 @@ fn the_full_grid_wraps_both_columns_and_remembers_the_field_selection() {
     let Some(store) = store() else { return };
     let host = Host::new(&FULL);
     let base = LogicalFrame::default();
-    let mut menu = StartMenu::open(&store, &host, &base).unwrap();
+    let mut menu = StartMenu::open(&store, &host, &base, X_PRESS).unwrap();
     assert_eq!(
         menu.insertion_order()[..8],
         [
@@ -349,7 +357,7 @@ fn the_full_grid_wraps_both_columns_and_remembers_the_field_selection() {
         }
     }
     let remembering = Remembering(Host::new(&FULL));
-    let menu = StartMenu::open(&store, &remembering, &base).unwrap();
+    let menu = StartMenu::open(&store, &remembering, &base, X_PRESS).unwrap();
     assert_eq!(menu.selected_slot(), Some(5), "SAVE was the last pick");
     assert_eq!(menu.selection_index(), 5);
 }
@@ -361,7 +369,7 @@ fn a_picks_the_cursor_slot_after_the_fade_and_save_switches_at_once() {
     let base = LogicalFrame::default();
     // OPTIONS: the six-step brightness fade, then the launch with the
     // bar cleared and the screens black.
-    let mut menu = StartMenu::open(&store, &host, &base).unwrap();
+    let mut menu = StartMenu::open(&store, &host, &base, X_PRESS).unwrap();
     press(&mut menu, key::RIGHT, &host);
     press(&mut menu, key::UP, &host);
     assert_eq!(menu.selected_slot(), Some(6));
@@ -395,7 +403,7 @@ fn a_picks_the_cursor_slot_after_the_fade_and_save_switches_at_once() {
     assert_eq!(idle(&mut menu, &host), StartMenuEvent::None);
 
     // SAVE: no fade — the touch save app takes the sub screen at once.
-    let mut menu = StartMenu::open(&store, &host, &base).unwrap();
+    let mut menu = StartMenu::open(&store, &host, &base, X_PRESS).unwrap();
     press(&mut menu, key::RIGHT, &host);
     press(&mut menu, key::DOWN, &host);
     assert_eq!(menu.selected_slot(), Some(5));
@@ -406,7 +414,7 @@ fn a_picks_the_cursor_slot_after_the_fade_and_save_switches_at_once() {
     assert!(!menu.is_open());
 
     // The dex on the first slot, straight away.
-    let mut menu = StartMenu::open(&store, &host, &base).unwrap();
+    let mut menu = StartMenu::open(&store, &host, &base, X_PRESS).unwrap();
     press(&mut menu, key::A, &host);
     let (event, _) = run_until_event(&mut menu, &host, 30);
     assert_eq!(event, StartMenuEvent::Selected(StartMenuAction::Pokedex));
@@ -420,7 +428,7 @@ fn b_and_x_close_and_restore_the_base_frame_but_start_does_not() {
     base.main.backdrop = 0x7C1F;
     base.sub.backdrop = 0x03E0;
     for close in [key::B, key::X] {
-        let mut menu = StartMenu::open(&store, &host, &base).unwrap();
+        let mut menu = StartMenu::open(&store, &host, &base, X_PRESS).unwrap();
         assert_ne!(menu.frame(), &base);
         assert_eq!(
             menu.frame().sub.backdrop,
@@ -438,7 +446,7 @@ fn b_and_x_close_and_restore_the_base_frame_but_start_does_not() {
     }
     // The header strip is the touch close: ov27 queues 1, the C task
     // reads it on its next pass.
-    let mut menu = StartMenu::open(&store, &host, &base).unwrap();
+    let mut menu = StartMenu::open(&store, &host, &base, X_PRESS).unwrap();
     assert_eq!(touch(&mut menu, 100, 5, &host), StartMenuEvent::None);
     assert_eq!(menu.last_touch_menu_input(), 1);
     assert_eq!(
@@ -455,7 +463,7 @@ fn a_stylus_press_on_an_icon_selects_it_through_the_touch_queue() {
     let Some(store) = store() else { return };
     let host = Host::new(&FULL);
     let base = LogicalFrame::default();
-    let mut menu = StartMenu::open(&store, &host, &base).unwrap();
+    let mut menu = StartMenu::open(&store, &host, &base, X_PRESS).unwrap();
     // Slot 5 (SAVE) sits at (96..156, 62..94).
     assert_eq!(touch(&mut menu, 120, 75, &host), StartMenuEvent::None);
     assert_eq!(menu.selected_slot(), Some(5));
@@ -470,7 +478,7 @@ fn a_stylus_press_on_an_icon_selects_it_through_the_touch_queue() {
 
     // A press on an unlit slot is swallowed: nothing queued, no move.
     let host = Host::new(&AFTER_MOM);
-    let mut menu = StartMenu::open(&store, &host, &base).unwrap();
+    let mut menu = StartMenu::open(&store, &host, &base, X_PRESS).unwrap();
     assert_eq!(touch(&mut menu, 30, 30, &host), StartMenuEvent::None);
     assert_eq!(menu.selected_slot(), Some(2));
     assert_eq!(menu.last_touch_menu_input(), 0);
@@ -488,4 +496,74 @@ fn a_stylus_press_on_an_icon_selects_it_through_the_touch_queue() {
     );
     let (event, _) = run_until_event(&mut menu, &host, 30);
     assert_eq!(event, StartMenuEvent::Selected(StartMenuAction::Bag));
+}
+
+#[test]
+fn a_button_or_stylus_held_across_the_open_is_not_a_new_press() {
+    let Some(store) = store() else { return };
+    let host = Host::new(&FULL);
+    let base = LogicalFrame::default();
+    let held = |keys: u16| Input {
+        keys: Keys(keys),
+        touch: None,
+    };
+    let tick = |menu: &mut StartMenu, input: Input| {
+        menu.tick(apricorn_core::Frame { index: 0 }, input, &host)
+    };
+
+    // The X that opened the menu is the field's edge (gSystem.newKeys
+    // is global): however long it stays down, Task_StartMenu_HandleInput
+    // never sees it as new, so the menu stays up.
+    let mut menu = StartMenu::open(&store, &host, &base, X_PRESS).unwrap();
+    for _ in 0..10 {
+        assert_eq!(tick(&mut menu, held(key::X)), StartMenuEvent::None);
+        assert!(menu.is_open(), "a held X does not close the menu");
+    }
+    // Released and pressed again, it is an edge: CLOSE, then Closed.
+    assert_eq!(tick(&mut menu, Input::default()), StartMenuEvent::None);
+    assert_eq!(tick(&mut menu, held(key::X)), StartMenuEvent::None);
+    assert_eq!(tick(&mut menu, Input::default()), StartMenuEvent::Closed);
+    assert_eq!(menu.frame(), &base);
+
+    // The same for B, and for a B that outlives the X it was held with.
+    let mut menu = StartMenu::open(&store, &host, &base, held(key::X | key::B)).unwrap();
+    for _ in 0..3 {
+        assert_eq!(tick(&mut menu, held(key::B)), StartMenuEvent::None);
+        assert!(menu.is_open());
+    }
+    assert_eq!(tick(&mut menu, Input::default()), StartMenuEvent::None);
+    assert_eq!(tick(&mut menu, held(key::B)), StartMenuEvent::None);
+    assert_eq!(tick(&mut menu, Input::default()), StartMenuEvent::Closed);
+
+    // A held A picks nothing; a fresh A picks the cursor slot.
+    let mut menu = StartMenu::open(&store, &host, &base, held(key::X | key::A)).unwrap();
+    for _ in 0..3 {
+        assert_eq!(tick(&mut menu, held(key::A)), StartMenuEvent::None);
+        assert_eq!(menu.last_action(), None, "a held A picks nothing");
+    }
+    assert_eq!(tick(&mut menu, Input::default()), StartMenuEvent::None);
+    assert_eq!(tick(&mut menu, held(key::A)), StartMenuEvent::None);
+    assert_eq!(menu.last_action(), Some(StartMenuAction::Pokedex));
+
+    // A stylus already down at the open is not a new touch
+    // (TouchscreenHitbox_FindRectAtTouchNew): resting on SAVE queues
+    // nothing and moves nothing until it is lifted and pressed again.
+    let on_save = Input {
+        keys: Keys::IDLE,
+        touch: Some(Touch { x: 120, y: 75 }),
+    };
+    let mut menu = StartMenu::open(&store, &host, &base, on_save).unwrap();
+    for _ in 0..3 {
+        assert_eq!(tick(&mut menu, on_save), StartMenuEvent::None);
+        assert_eq!(menu.selected_slot(), Some(0), "the cursor stays on the dex");
+        assert_eq!(menu.last_touch_menu_input(), 0, "nothing queued");
+    }
+    assert_eq!(tick(&mut menu, Input::default()), StartMenuEvent::None);
+    assert_eq!(tick(&mut menu, on_save), StartMenuEvent::None);
+    assert_eq!(menu.selected_slot(), Some(5));
+    assert_eq!(menu.last_touch_menu_input(), 2 + 5);
+    assert_eq!(
+        tick(&mut menu, Input::default()),
+        StartMenuEvent::Selected(StartMenuAction::Save)
+    );
 }
