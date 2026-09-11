@@ -70,10 +70,28 @@ Layouts: `ov27_0225BD50` picks one of seven slot rows
 park, union room (`bottomScreenType == 3`, LOG in the gear slot),
 colosseum, and the battle tower partner room. `StartMenu::open` is the
 X-button open; `open_union_room` and `open_colosseum` are
-`sub_0203BCDC`/`sub_0203BD20`.
+`sub_0203BCDC`/`sub_0203BD20`. Each takes the store, the host, the
+base frame, and the *opening frame's input* (see below).
+
+`actions()` is `selectionToAction[..numActiveButtons]`, the display
+list the compact index addresses, and it has holes: 9 and 10 go to
+display slots 7 and 8 while the count keeps advancing, so a fresh
+save's slots 4–6 and a full menu's slot 9 are never written. They are
+`None` in the accessor; the C's cleared struct holds 0 (POKéDEX) there,
+which a pick would read as the dex — a read overlay 27's compact index
+never makes.
 
 ## Input
 
+- The opening frame's input seeds the edge state. `gSystem.newKeys`
+  is global: the X that opened the menu was the field's edge
+  (`field_control.c:303-306`), and `Task_StartMenu`'s `INIT` pass
+  only sets `HANDLE_INPUT` and breaks (`start_menu.c:338-352`), so
+  the first pass that reads keys is a frame later and a still-held X,
+  B, or A is not new. Pass the input the field's opener read to
+  `open` and the same holds here: a button held across the open
+  closes or picks nothing until it is released and pressed again, and
+  a stylus already down is not a new touch.
 - UP/DOWN/LEFT/RIGHT (`ov27_0225B404`): the first new direction, three
   candidates per slot and direction from `ov27_0225D0B4`, the first lit
   one wins. Columns wrap; a row whose candidates are all unlit stays
@@ -82,9 +100,13 @@ X-button open; `open_union_room` and `open_colosseum` are
 - A: `StartMenu_HandleKeyInput`. EXIT (`STARTMENUTASKFUNC_CANCEL`)
   closes; app launches run the six-step `FieldMap_FadeScreen`
   brightness fade and then report `Selected` with the bar cleared and
-  both screens black; SAVE reports `Selected` at once (the touch save
-  app takes the sub screen); RETIRE clears the bar and reports at
-  once; the union-room LOG reports and then closes two ticks later.
+  both screens black — the A frame writes step 1, the next five write
+  steps 2–6, the seventh clears the fade manager's flag, and the
+  eighth is the first `WaitFade` pass that sees it finished, so the
+  launch lands eight frames after the press; SAVE reports `Selected`
+  at once (the touch save app takes the sub screen); RETIRE clears the
+  bar and reports at once; the union-room LOG reports and then closes
+  two ticks later.
 - B or X: `START_MENU_STATE_CLOSE` on the next pass — the base frame
   returns and the event is `Closed`. START does not close (it is not
   in the C's mask).
@@ -125,8 +147,9 @@ header (`00012`); the trainer card's label is the player's name
 
 - `crates/apricorn-core/tests/start_menu_hg.rs` (ROM-gated): the
   fresh, post-Mom, and full entry sets; column wrap and the unlit
-  fallback; A picks (fade-out launch, immediate SAVE); B/X close and
-  START not; touch close and touch pick.
+  fallback; A picks (the eight-frame fade-out launch, immediate SAVE);
+  B/X close and START not; touch close and touch pick; X, B, A, and
+  the stylus held across the open are not new presses.
 - `crates/apricorn-gfx/tests/start_menu_hg.rs` (ROM-gated): SHA-1 of
   both screens for the full, post-Mom, and fresh menus over a black
   base frame; a cursor walk moving the highlight; close restoring the
@@ -143,7 +166,16 @@ Audio (`PlaySE`); the launched apps; the closed-state sub-screen UI
 overlay 27's other look); the pop-in animation of newly unlocked icons
 (`ov27_0225AAD4`); the safari / bug-contest / pal-park ball counters
 (`ov27_0225C0E0`); the per-sprite OAM-mode override that dims
-unselected icons through the blend unit (`Sprite_SetOamMode` — the
-frame model carries no per-sprite mode, so the register state is set
-and the icons render opaque); the `MenuInputStateMgr` memory beyond
-one open; `fieldSystem->unk90`'s write-only `lastButtonSelected`.
+unselected icons through the blend unit (`ov27_0225B4AC`,
+`overlay_27.s:2601-2640`, sets OAM mode 1 on every icon but the
+selected one, and `ov27_0225A8E8(1)` programs the sub blend unit at
+EVA 6 / EVB 9 — so on hardware every unselected icon is translucent
+over the panel). The frame model's `Sprite` carries no per-sprite mode
+and the rasterizer takes the mode from the cell's own OAM attributes
+(`apricorn-gfx/src/sprites.rs:153`), so honoring the override is a
+frame-model change (a `Sprite` field plus the rasterizer) outside this
+slice; the register state is set and the icons render opaque, and the
+goldens pin that look — an oracle comparison of an open-menu frame
+will differ on every unselected icon until it lands. Also deferred:
+the `MenuInputStateMgr` memory beyond one open, and
+`fieldSystem->unk90`'s write-only `lastButtonSelected`.
