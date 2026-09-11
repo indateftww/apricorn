@@ -1139,8 +1139,34 @@ fn child_tasks_suspend_the_script_until_they_return() {
     }));
     h.pending.insert(WaitFor::ChildTask, 1);
     let mut e = env();
-    let (frames, _) = run(&mut e, &mut h, 30);
-    assert_eq!(frames, 12, "one fade poll, four child tasks (the first pending once)");
+    // Frame 1: FadeScreen, WaitFade installs its native wait. Frame 2:
+    // the fade poll holds; bytecode resumes next frame (RunScriptCommand
+    // returns TRUE after flipping the mode). Frame 3: Warp pushes the
+    // child task — the C returns TRUE with the context still in
+    // BYTECODE mode, and Task_RunScripts is not the active task.
+    for _ in 0..3 {
+        assert_eq!(e.run_frame(&mut h).unwrap(), FrameStatus::Running);
+    }
+    assert!(e.child_task_pending());
+    assert_eq!(e.context(0).unwrap().mode(), Mode::Bytecode);
+    assert_eq!(e.context(0).unwrap().native(), None);
+    assert_eq!(h.actions().len(), 2, "FadeScreen and Warp");
+    // Frame 4: the child is still up (the mock's one pending poll) —
+    // nothing runs. Frame 5: the child returns and, as
+    // FieldSystem_RunTaskFrame pops to the parent in the same frame,
+    // RestoreOverworld runs at once and pushes the next child.
+    assert_eq!(e.run_frame(&mut h).unwrap(), FrameStatus::Running);
+    assert!(e.child_task_pending());
+    assert_eq!(h.actions().len(), 2, "no command ran while the child task was up");
+    assert_eq!(e.run_frame(&mut h).unwrap(), FrameStatus::Running);
+    assert_eq!(h.actions().len(), 3, "the frame the child returned ran RestoreOverworld");
+    assert!(e.child_task_pending());
+    // Frames 6, 7: Cmd436 and CameronPhoto each run the frame the
+    // previous child returns; frame 8: Cmd582 and End.
+    let (frames, status) = run(&mut e, &mut h, 30);
+    assert_eq!(frames, 3);
+    assert_eq!(status, FrameStatus::Finished { callback: false });
+    assert!(!e.child_task_pending());
     assert_eq!(
         h.actions(),
         vec![

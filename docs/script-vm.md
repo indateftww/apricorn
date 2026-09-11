@@ -135,8 +135,17 @@ fade finished, a child task returned, ...) — plus `launch` for the
 applications a script hands control to (naming screen, starter choice,
 tutorial battle, mail). Sound is recorded, never played. The
 `CallTask_*` commands (`Warp`, `RestoreOverworld`, `ScrCmd_436`,
-`CameronPhoto`) wait on `WaitFor::ChildTask`, since the original's
-script task is simply not run while the child task is up.
+`CameronPhoto`) are the one wait that is not a NATIVE-mode predicate:
+the C returns `TRUE` with the context still in BYTECODE mode and pushes
+a child task with `TaskManager_Call`, so `Task_RunScripts` is simply
+not run while the child is up — and the frame the child's function
+returns `TRUE`, `FieldSystem_RunTaskFrame`'s loop pops back to the
+script task and calls it at once. `run_frame` models exactly that: with
+a child task pending it polls `WaitFor::ChildTask` before stepping any
+context, returns `Running` while the host says the child is still up,
+and otherwise runs the frame normally, so the next command executes in
+the frame the child returns. (`run_map_load_script` does not poll it:
+`StartMapLoadScript`'s `while` loop involves no task manager.)
 
 `host::RecordingHost` is the mock: it logs every call as a
 `HostEvent`, answers queries and waits from tables (`queries`,

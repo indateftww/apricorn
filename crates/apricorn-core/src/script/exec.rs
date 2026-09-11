@@ -174,6 +174,17 @@ impl Cmd<'_> {
         Flow::Yield
     }
 
+    /// `TaskManager_Call` from a command: the C returns `TRUE` with the
+    /// context left in BYTECODE mode, and `Task_RunScripts` is simply
+    /// not run while the child task is up — then runs again in the very
+    /// frame the child returns (`FieldSystem_RunTaskFrame`'s loop pops
+    /// to the parent and calls it at once). [`ScriptEnvironment::run_frame`]
+    /// polls [`WaitFor::ChildTask`] before stepping any context.
+    fn call_task(&mut self) -> Flow {
+        self.env.call_task();
+        Flow::Yield
+    }
+
     /// `sConditionTable[condition][comparisonResult]`.
     fn condition(&self, condition: u8) -> bool {
         CONDITION_TABLE
@@ -1117,21 +1128,19 @@ pub(crate) fn execute(
             c.host.launch(AppRequest::Mail);
             c.native(NativeWait::App { result_var: None })
         }
-        // These push a child task (`TaskManager_Call`): the C returns
-        // TRUE and the script task is simply not run until the child
-        // returns, which the host reports as `ChildTask`.
+        // These push a child task (`TaskManager_Call`): see `call_task`.
         Opcode::RestoreOverworld => {
             c.action(FieldAction::RestoreOverworld);
-            c.wait(WaitFor::ChildTask)
+            c.call_task()
         }
         Opcode::Cmd436 => {
             c.action(FieldAction::LeaveOverworld);
-            c.wait(WaitFor::ChildTask)
+            c.call_task()
         }
         Opcode::CameronPhoto => {
             let photo = c.u16()?;
             c.action(FieldAction::TakePhoto(photo));
-            c.wait(WaitFor::ChildTask)
+            c.call_task()
         }
 
         // ---- fades and warps (scrcmd_c.c:2187-2260, 4097) ----
@@ -1161,7 +1170,7 @@ pub(crate) fn execute(
                 y,
                 direction,
             });
-            c.wait(WaitFor::ChildTask)
+            c.call_task()
         }
         Opcode::Cmd582 => {
             let map = c.var()?;

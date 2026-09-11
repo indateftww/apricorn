@@ -23,7 +23,7 @@ use crate::text::string::GameString;
 use super::ScriptError;
 use super::bank::{ScriptBank, resolve_script};
 use super::context::ScriptContext;
-use super::host::ScriptHost;
+use super::host::{ScriptHost, WaitFor};
 
 /// `NELEMS(env->scriptContexts)`.
 pub const NUM_CONTEXTS: usize = 3;
@@ -64,6 +64,10 @@ pub struct ScriptEnvironment {
     /// create it, `CloseMsg`/`HoldMsg` remove it); signposts never
     /// touch it.
     window_open: bool,
+    /// A `TaskManager_Call` child task (a warp, `RestoreOverworld`,
+    /// `CameronPhoto`, ...) is up: `Task_RunScripts` is not the active
+    /// task until it returns, and then runs in that same frame.
+    child_task: bool,
     /// `msgfmt` — `MessageFormat_New_Custom(8, 64)`.
     msgfmt: MessageFormat,
     /// `stringBuffer0` — the expanded text of the last message.
@@ -97,6 +101,7 @@ impl ScriptEnvironment {
             std_wait_mask: 0,
             textbox_open: false,
             window_open: false,
+            child_task: false,
             msgfmt: MessageFormat::new(8),
             string_buffer0: GameString::new(),
             string_buffer1: GameString::new(),
@@ -186,6 +191,13 @@ impl ScriptEnvironment {
     #[must_use]
     pub fn end_callback_armed(&self) -> bool {
         self.end_callback
+    }
+
+    /// Whether a child task is up (`TaskManager_Call`): [`Self::run_frame`]
+    /// polls [`WaitFor::ChildTask`] instead of stepping the contexts.
+    #[must_use]
+    pub fn child_task_pending(&self) -> bool {
+        self.child_task
     }
 
     /// `FieldSystem_VarGet`: a literal below `VAR_BASE` reads as
@@ -282,6 +294,16 @@ impl ScriptEnvironment {
     /// Propagates the first context error; that context is stopped and
     /// destroyed, the others keep their state for inspection.
     pub fn run_frame(&mut self, host: &mut dyn ScriptHost) -> Result<FrameStatus, ScriptError> {
+        if self.child_task {
+            // `FieldSystem_RunTaskFrame` runs the child instead of us;
+            // the frame its function returns TRUE the loop pops back to
+            // `Task_RunScripts` and calls it at once, so the next command
+            // runs in this very frame.
+            if host.poll(WaitFor::ChildTask).is_none() {
+                return Ok(FrameStatus::Running);
+            }
+            self.child_task = false;
+        }
         if !self.started {
             let ctx = self.create_context(host, self.active_script)?;
             self.contexts[0] = Some(ctx);
@@ -317,8 +339,10 @@ impl ScriptEnvironment {
     /// `StartMapLoadScript` (`src/script_manager.c:580`): runs `script`
     /// synchronously — `while (RunScriptCommand(ctx) == TRUE) {}` — in
     /// a fresh context 0, no frames in between (a native wait spins
-    /// within the call, so init scripts never wait). Returns how many
-    /// `RunScriptCommand` calls it took.
+    /// within the call, so init scripts never wait; a child task a
+    /// command pushes does not suspend the loop either, since no task
+    /// manager is involved — it is left pending for the host). Returns
+    /// how many `RunScriptCommand` calls it took.
     ///
     /// # Errors
     /// As [`Self::create_context`] and the commands; [`ScriptError::Runaway`]
@@ -370,6 +394,12 @@ impl ScriptEnvironment {
 
     pub(crate) fn set_window_open(&mut self, open: bool) {
         self.window_open = open;
+    }
+
+    /// `TaskManager_Call` from a command: suspend the whole task until
+    /// the host reports the child task returned.
+    pub(crate) fn call_task(&mut self) {
+        self.child_task = true;
     }
 
     pub(crate) fn std_wait_mask(&self) -> u8 {

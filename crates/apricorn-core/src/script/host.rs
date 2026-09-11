@@ -411,7 +411,11 @@ pub enum WaitFor {
     App,
     /// The `TaskManager_Call` child task the last action pushed (a
     /// warp, `CallTask_RestoreOverworld`, `FieldSystem_TakePhoto`, ...)
-    /// has returned — the script task does not run while it is up.
+    /// has returned. Unlike the other waits this is polled by
+    /// [`super::ScriptEnvironment::run_frame`] before any context
+    /// steps, and the frame it answers the script runs on at once —
+    /// `FieldSystem_RunTaskFrame` pops to `Task_RunScripts` and calls
+    /// it in the same frame the child's function returns `TRUE`.
     ChildTask,
     /// The yes/no menu chose (0 yes, 1 no).
     YesNo,
