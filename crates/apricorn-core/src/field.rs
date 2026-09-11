@@ -1,6 +1,9 @@
 //! ROM-backed field landing. The first map is T20R0202 (New Bark 2F).
 //! Geometry stays fixed-point in the logical frame; only the presenter
 //! projects it. This is the static field entry, not the Phase 5 script VM.
+pub mod avatar;
+pub mod input;
+pub mod map_object;
 pub mod model;
 
 use crate::{
