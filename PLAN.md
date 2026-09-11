@@ -290,8 +290,12 @@ Picking this up later:
 - Two unreviewed partial branches are parked, each one WIP commit off
   `ac469ad`: `parked/phase6-pokemon-data` (Pokémon encryption/party/
   bag/Pokédex views, `docs/pokemon.md`) and `parked/phase7-audio` (the
-  `apricorn-audio` crate). Rebase onto the current branch, finish and
-  review before merging.
+  `apricorn-audio` crate). Both build (checked 2026-09-11) but are NOT
+  mergeable yet: the Pokémon branch fails 7 of 23 tests including all
+  six arm-runner differentials against the original accessors, and the
+  audio crate fails 2 of 46 unit tests. Rebase onto `main`, fix, review,
+  then merge; nothing in the game calls them, so they are parked, not
+  blocking.
 - Worktree setup for a fresh checkout (the inputs are gitignored): copy
   or hardlink `hg_usa.nds` and `hg.sav` into the checkout root, clone
   `refs/pokeheartgold` and `refs/melonds`, build the oracle with
