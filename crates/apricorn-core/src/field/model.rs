@@ -199,7 +199,17 @@ fn dict(b: &[u8], p: usize) -> Result<Vec<(&str, &[u8])>, NdsError> {
         })
         .collect()
 }
-pub(crate) fn decode_texture(
+/// Decodes one NSBTX texture through one of its palettes into RGBA8.
+///
+/// Palette index 0 is transparent when the texture's `color0` flag says
+/// so; A3I5/A5I3 carry their own alpha. Public so the field system can
+/// decode a map object's walk frames (`a/0/8/1` members hold one
+/// texture per frame) the same way materials are decoded here.
+///
+/// # Errors
+/// Returns an [`NdsError`] when the texture or palette name is not in
+/// the archive or the pixel data is short.
+pub fn decode_texture(
     btx: &Btx<'_>,
     name: &str,
     palette: &str,

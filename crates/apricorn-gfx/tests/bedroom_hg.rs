@@ -1,5 +1,9 @@
 //! ROM-gated field landing regression and optional review images.
-use apricorn_core::{assets::AssetStore, field::FieldScene, frame::LogicalFrame};
+use apricorn_core::{
+    assets::AssetStore,
+    field::FieldScene,
+    frame::{FieldFrame, LogicalFrame},
+};
 use std::{path::Path, sync::Arc};
 
 /// The field's BG0 as the game shows it: the plane is turned on once
@@ -10,7 +14,7 @@ use std::{path::Path, sync::Arc};
 /// manager's `G2_SetBG0Priority(1)` reference).
 fn field_frame(scene: FieldScene) -> LogicalFrame {
     let mut frame = LogicalFrame::default();
-    frame.main.field = Some(Arc::new(scene));
+    frame.main.field = Some(FieldFrame::static_scene(Arc::new(scene)));
     frame.main.bgs[0].enabled = true;
     frame.main.bgs[0].priority = 1;
     frame

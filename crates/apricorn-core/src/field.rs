@@ -26,6 +26,7 @@ pub mod map_object;
 pub mod model;
 pub mod ov01;
 pub mod script_header;
+pub mod system;
 pub mod terrain;
 
 use std::collections::HashMap;
