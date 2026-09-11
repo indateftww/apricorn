@@ -90,3 +90,35 @@ gExtraSaveChunkHeaders	data	0x020F6464	96	fad6e7e8bd725a3e44ec3e16489e1195663393
 # in slot 64 of a 540-record table; neighbours decode to pret's records.
 
 sMapHeaders	data	0x020F6BE0	12960	26ea13ffdda304dde0159e3eda1fccf7eeac66b1	record scan: map 64's 24-byte record @ 0x020F71E0 (540 x 24 B)
+
+# Field movement (Phase 5) - see docs/field-movement.md. pret names unknown
+# functions by address, so each address is the name; every prologue was checked
+# against the instruction listing in asm/unk_02062108.s, asm/unk_0205FD20.s and
+# asm/unk_0205CB48.s before pinning. gMovementCmdTable comes from
+# MapObject_RunMovementCommand's literal pool (_0206246C).
+MapObject_AreBitsSetForMovementScriptInit	thumb	0x02062108	68	e11052df1e1f39ea733cff879531732d7641fb48	pret asm/unk_02062108.s:25 (label line; prologue matched)
+MapObject_SetHeldMovement	thumb	0x0206214C	48	d0644beb466e6b4b07c494f89365280178d83703	pret asm/unk_02062108.s:62 (label line; prologue matched)
+MapObject_IsMovementPaused	thumb	0x02062198	40	75af1b7151e3ec0fead210bbf2e47a1868b1c04f	pret asm/unk_02062108.s:101 (label line; prologue matched)
+MapObject_ClearHeldMovement	thumb	0x020621F0	36	e899e50392e2bbf264a070f82c5f5556d9e13834	pret asm/unk_02062108.s:152 (label line; prologue matched)
+MovementScriptMachineSub_Done	thumb	0x02062348	4	20a11ec2c24c8a7b639631b8e02e420a6ed31b9c	pret asm/unk_02062108.s:352 (label line; prologue matched)
+sub_0206234C	thumb	0x0206234C	68	3161e6dfab55b2c722ad51716627330338674754	pret asm/unk_02062108.s:358 (label line; prologue matched)
+sub_02062390	thumb	0x02062390	56	e7a3d65a0319b277e53f7a736c039c0a3427f822	pret asm/unk_02062108.s:399 (label line; prologue matched)
+sub_02062400	thumb	0x02062400	40	cc47404a0f8787281d231eedf7c073cf50f64249	pret asm/unk_02062108.s:471 (label line; prologue matched)
+MapObject_RunMovementCommand	thumb	0x0206245C	20	8ddc2bd9dbf87e288e6651bf84a97a365c67c41c	pret asm/unk_02062108.s:520 (label line; prologue matched)
+MapObjectMovementCmd098_Step2	thumb	0x02062470	12	739a08e9feb81e2718fc2deee1608ae3ee769d34	pret asm/unk_02062108.s:534 (label line; prologue matched)
+sub_0206247C	thumb	0x0206247C	32	6d41667f9865bbf8041df290f711382783bda2a1	pret asm/unk_02062108.s:543 (label line; prologue matched)
+sub_020624CC	thumb	0x020624CC	72	c953236dd2f5eae37d9b8adf90007360c60e87ac	pret asm/unk_02062108.s:595 (label line; prologue matched)
+MapObjectMovementCmd090_Step1	thumb	0x02062514	84	c1af7ae88c5ab0151fc79873fa5b2a5c5ed6518d	pret asm/unk_02062108.s:629 (label line; prologue matched)
+sub_020627B0	thumb	0x020627B0	52	d1fb813129b3f1b36c59b13ffd9e1a65e629a34b	pret asm/unk_02062108.s:1044 (label line; prologue matched)
+MapObjectMovementCmd040_Step1	thumb	0x020627E4	52	317475e4c5148909c6a13870a299ebe68dc6c8f7	pret asm/unk_02062108.s:1069 (label line; prologue matched)
+sub_0206101C	thumb	0x0206101C	84	e3ad899f41ef92de23ed5c50654617f29a6463f0	pret asm/unk_0205FD20.s:2395 (label line; prologue matched)
+sub_02061070	thumb	0x02061070	152	118612526f3632d8600432e528c13a8d87c3146b	pret asm/unk_0205FD20.s:2445 (label line; prologue matched)
+sub_02060F24	thumb	0x02060F24	84	33797f2d4adc802e9942019c14704d8d8b2ed686	pret asm/unk_0205FD20.s:2284 (label line; prologue matched)
+sub_02060F78	thumb	0x02060F78	48	ef442a660a4f72fcf5a940f9e13349f9c03e813a	pret asm/unk_0205FD20.s:2319 (label line; prologue matched)
+sub_0205DD9C	thumb	0x0205DD9C	28	4709bd7d6c5664d4d94c6a3e3cca88c07aeb3497	pret asm/unk_0205CB48.s:2356 (label line; prologue matched)
+sub_0205DDB8	thumb	0x0205DDB8	28	6d6565d75f83db2c32dd4861917db6ec211be305	pret asm/unk_0205CB48.s:2377 (label line; prologue matched)
+sub_0205DDD4	thumb	0x0205DDD4	100	43f3633f86060f01d9ae6d7975805b9b45251fd4	pret asm/unk_0205CB48.s:2398 (label line; prologue matched)
+sub_0205DE64	thumb	0x0205DE64	36	7f750a022fc3529f68a12f8015dc7c00d917d185	pret asm/unk_0205CB48.s:2476 (label line; prologue matched)
+sub_0205D450	thumb	0x0205D450	68	10de49879bd68d1cd565cf251448af13ebee0fb0	pret asm/unk_0205CB48.s:1169 (label line; prologue matched)
+PlayerAvatar_UpdateMovement	thumb	0x0205CE68	220	a5f6ee36c82f79a96dea98895dd826d808bff95c	pret asm/unk_0205CB48.s:401 (label line; prologue matched)
+gMovementCmdTable	data	0x020FD2D8	452	35506a46ad66df84dadc3a4ae43bbc69be2c01d6	pool _0206246C @ 0x0206246C in MapObject_RunMovementCommand; 113 step-array pointers
