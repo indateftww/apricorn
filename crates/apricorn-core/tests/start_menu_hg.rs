@@ -173,13 +173,17 @@ fn a_fresh_save_lists_the_three_default_entries_but_draws_no_icon() {
             StartMenuAction::Action10,
         ]
     );
+    // The display list the compact index addresses: six entries, the
+    // two after EXIT never written (9 and 10 sit at slots 7 and 8).
     assert_eq!(
-        &menu.actions()[..4],
-        &[
-            StartMenuAction::TrainerCard,
-            StartMenuAction::Save,
-            StartMenuAction::Options,
-            StartMenuAction::RunningShoes,
+        menu.actions(),
+        [
+            Some(StartMenuAction::TrainerCard),
+            Some(StartMenuAction::Save),
+            Some(StartMenuAction::Options),
+            Some(StartMenuAction::RunningShoes),
+            None,
+            None,
         ]
     );
     assert!(!menu.is_union_room());
@@ -378,10 +382,13 @@ fn a_picks_the_cursor_slot_after_the_fade_and_save_switches_at_once() {
     assert!(!menu.input_touch_mode());
     let (event, ticks) = run_until_event(&mut menu, &host, 30);
     assert_eq!(event, StartMenuEvent::Selected(StartMenuAction::Options));
-    assert!(
-        (3..=8).contains(&ticks),
-        "FieldMap_FadeScreen: six one-frame steps (one spent on the release), got {ticks}"
-    );
+    // FieldMap_FadeScreen(6, 1): the A frame begins the fade and its
+    // vblank writes step 1; the release frame writes step 2; the run's
+    // frames 1–4 write steps 3–6 (the sixth snaps to black); frame 5
+    // frees the work and clears the manager's flag (HandleEndFade);
+    // frame 6 is the first Task_StartMenu_WaitFade pass that sees
+    // IsPaletteFadeFinished — eight frames from the press to the launch.
+    assert_eq!(ticks, 6, "the launch lands on the eighth frame after A");
     assert!(!menu.is_open());
     assert_eq!(
         menu.frame().main.bgs[3].screen,

@@ -663,7 +663,10 @@ pub struct StartMenu {
     /// `StartMenuTaskData.insertionOrder`.
     insertion_order: [u8; 10],
     /// `StartMenuTaskData.selectionToAction` — the display order.
-    selection_to_action: [u8; 10],
+    /// `None` is a slot no insert wrote: the C's `MI_CpuClearFast`'d
+    /// struct holds 0 (POKéDEX) there, and [`Self::select`] reads it
+    /// so.
+    selection_to_action: [Option<u8>; 10],
     /// `StartMenuTaskData.numActiveButtons`.
     num_active: u32,
     /// `fieldSystem->unkD3` — the compact selection index.
@@ -962,12 +965,19 @@ impl StartMenu {
     }
 
     /// `selectionToAction[..numActiveButtons]` — the display order the
-    /// compact selection index addresses.
+    /// compact selection index addresses. The array has holes:
+    /// `StartMenu_BuildActionLists` writes `START_MENU_ACTION_9/10`
+    /// to display slots 7 and 8 while the count keeps advancing, so
+    /// the slots between the last flag-gated entry and slot 7 (a
+    /// fresh save's 4–6) and slot 9 of a full menu are never written.
+    /// Those are `None` here; in the C they hold the cleared struct's
+    /// 0, which `StartMenu_HandleKeyInput` would read as POKéDEX — a
+    /// read overlay 27's compact index never makes.
     #[must_use]
-    pub fn actions(&self) -> Vec<StartMenuAction> {
+    pub fn actions(&self) -> Vec<Option<StartMenuAction>> {
         self.selection_to_action[..self.num_active as usize]
             .iter()
-            .map(|&a| StartMenuAction::from_index(a).expect("the lists hold actions"))
+            .map(|&a| a.map(|a| StartMenuAction::from_index(a).expect("the lists hold actions")))
             .collect()
     }
 
@@ -1158,8 +1168,10 @@ impl StartMenu {
     /// — CANCEL closes, an available action runs its selection
     /// handler (`:597-608` / `:641-654`).
     fn select(&mut self, host: &dyn StartMenuHost, index: u8, by_touch: bool) -> StartMenuEvent {
-        let action = StartMenuAction::from_index(self.selection_to_action[usize::from(index)])
-            .expect("the lists hold actions");
+        // A hole reads as the cleared struct's 0, POKéDEX, as in the C.
+        let action =
+            StartMenuAction::from_index(self.selection_to_action[usize::from(index)].unwrap_or(0))
+                .expect("the lists hold actions");
         if action == StartMenuAction::RunningShoes {
             // STARTMENUTASKFUNC_CANCEL.
             self.state = State::Close;
@@ -1485,13 +1497,18 @@ impl StartMenu {
                 LABEL_BASE_TILE + LABEL_TILE_STRIDE * slot as u16,
             );
             let width = self.font0.string_width(label.units(), 0) as i32;
+            // `(0x48 - width) / 2`, signed (`lsr #0x1f; add; asr #1`,
+            // :3665-3673), handed to AddTextPrinterParameterizedWithColor
+            // as a u32 and stored in the template's u16 `currentX`
+            // (text.c:111) — a label wider than 72 px wraps to a
+            // large x the window clips, not to 0. None in the US ROM.
             let x = (LABEL_CENTER_WIDTH - width) / 2;
             let mut printer = TextPrinter::new(
                 0,
                 self.font0_asset,
                 self.focus_asset,
                 label,
-                x.max(0) as u16,
+                x as u16,
                 0,
                 LABEL_COLOR,
                 TEXT_SPEED_NOTRANSFER,
@@ -1651,13 +1668,15 @@ pub const fn inhibit_colosseum() -> u32 {
 /// (`StartMenuButton_Insert`'s explicit `position`, `:474-481`).
 /// Returns `(insertionOrder, selectionToAction, numActiveButtons)`.
 #[must_use]
-pub fn build_action_lists(inhibit: u32, unk_350: bool) -> ([u8; 10], [u8; 10], u32) {
+pub fn build_action_lists(inhibit: u32, unk_350: bool) -> ([u8; 10], [Option<u8>; 10], u32) {
     let mut insertion = [0u8; 10];
-    let mut display = [0u8; 10];
+    // The display list's unwritten slots stay `None` (the C's cleared
+    // struct holds 0 there); see `StartMenu::actions`.
+    let mut display = [None; 10];
     let mut len = 0u32;
     let mut insert = |item: StartMenuAction, position: Option<usize>| {
         insertion[len as usize] = item.index();
-        display[position.unwrap_or(len as usize)] = item.index();
+        display[position.unwrap_or(len as usize)] = Some(item.index());
         len += 1;
     };
     if inhibit & disable::RETIRE == 0 {
@@ -1882,32 +1901,37 @@ mod tests {
         assert_eq!(
             display,
             [
-                idx(StartMenuAction::Pokedex),
-                idx(StartMenuAction::Pokemon),
-                idx(StartMenuAction::Bag),
-                idx(StartMenuAction::Pokegear),
-                idx(StartMenuAction::TrainerCard),
-                idx(StartMenuAction::Save),
-                idx(StartMenuAction::Options),
-                idx(StartMenuAction::Action9),
-                idx(StartMenuAction::Action10),
-                0,
+                Some(idx(StartMenuAction::Pokedex)),
+                Some(idx(StartMenuAction::Pokemon)),
+                Some(idx(StartMenuAction::Bag)),
+                Some(idx(StartMenuAction::Pokegear)),
+                Some(idx(StartMenuAction::TrainerCard)),
+                Some(idx(StartMenuAction::Save)),
+                Some(idx(StartMenuAction::Options)),
+                Some(idx(StartMenuAction::Action9)),
+                Some(idx(StartMenuAction::Action10)),
+                None,
             ]
         );
-        // The fresh bedroom: no dex, starter, bag, or gear.
+        // The fresh bedroom: no dex, starter, bag, or gear — and the
+        // display slots between EXIT and 9 are holes.
         let (_, display, count) = build_action_lists(inhibit_normal(&host(&[])), false);
         assert_eq!(count, 6);
         assert_eq!(
-            &display[..4],
-            &[
-                idx(StartMenuAction::TrainerCard),
-                idx(StartMenuAction::Save),
-                idx(StartMenuAction::Options),
-                idx(StartMenuAction::RunningShoes),
+            display,
+            [
+                Some(idx(StartMenuAction::TrainerCard)),
+                Some(idx(StartMenuAction::Save)),
+                Some(idx(StartMenuAction::Options)),
+                Some(idx(StartMenuAction::RunningShoes)),
+                None,
+                None,
+                None,
+                Some(idx(StartMenuAction::Action9)),
+                Some(idx(StartMenuAction::Action10)),
+                None,
             ]
         );
-        assert_eq!(display[7], idx(StartMenuAction::Action9));
-        assert_eq!(display[8], idx(StartMenuAction::Action10));
         // Safari: RETIRE leads, SAVE is gone.
         let (insertion, _, count) = build_action_lists(inhibit_safari(), false);
         assert_eq!(count, 10);
