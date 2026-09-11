@@ -292,15 +292,19 @@ branch with ROM-gated tests, then the orchestrator wires them into
             → `apricorn-core::script`, `save::vars_flags`,
             `docs/script-vm.md`
 - [ ] Menus: start menu, bag, party screens — including touch-screen versions.
-      - [ ] Start menu port (`src/start_menu.c`) as a host-driven scene
-            component with ROM-gated render goldens.
-            → `apricorn-core::app::start_menu`, `docs/menus.md`
+      - [x] Start menu port (`src/start_menu.c` + overlay 27's touch-LCD
+            icon grid) as a host-driven scene component with ROM-gated
+            render goldens; the launched apps and the unselected-icon
+            OAM dimming are deferred. → `apricorn-core::app::start_menu`,
+            `docs/menus.md`
 - [ ] Day/night cycle & palette tinting (pinned-clock aware).
-      - [ ] Advancing frame-indexed RTC model, time-of-day buckets
-            (differential vs `GF_RTC_GetTimeOfDayByHour`), area-light
-            archive parsing, prop time-of-day visual state.
-            → `apricorn-core::rtc`, `field::{lighting,time_state}`,
+      - [x] Advancing frame-indexed RTC model (melonDS's 32768 Hz tick
+            over 560190-cycle frames), time-of-day buckets (differential
+            vs `GF_RTC_GetTimeOfDayByHour` and the SDK date converters),
+            the five area-light text archives, prop time-of-day visual
+            state. → `apricorn-core::rtc`, `field::{lighting,time_state}`,
             `docs/day-night.md`
+      - [ ] Apply the area-light template to the field renderer.
 
 Test infrastructure landing with this phase (Phase 2's promise):
 
