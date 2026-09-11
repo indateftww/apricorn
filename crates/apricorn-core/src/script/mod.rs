@@ -42,6 +42,8 @@ pub mod env;
 mod exec;
 pub mod header;
 pub mod host;
+#[cfg(test)]
+mod tests;
 
 use std::fmt;
 

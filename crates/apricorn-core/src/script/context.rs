@@ -115,7 +115,7 @@ pub enum NativeWait {
     /// and the variable in `data[0]`.
     MenuChoice,
     /// `sub_020478D0` — the scripted list menu's result into the
-    /// variable in `data[0]`.
+    /// variable `MenuInit` named (and `data[0]`'s, when that resolves).
     MenuExec,
     /// `sub_020479D4` — the bank-transaction result into the variable
     /// in `data[0]`.

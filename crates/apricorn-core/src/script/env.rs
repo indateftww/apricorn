@@ -57,8 +57,15 @@ pub struct ScriptEnvironment {
     /// `unk_7` — the `CallStd` wait mask: bit `id` is set while context
     /// `id` waits for the std script it called.
     std_wait_mask: u8,
-    /// `unk_8` / `fieldSystem->textbox_open` — the dialogue window is up.
+    /// `fieldSystem->textbox_open` — a text box (dialogue or signpost)
+    /// is showing; the field's input handling looks at it.
     textbox_open: bool,
+    /// `unk_8` — the dialogue *window* exists (`OpenMsg`/`NPCMsg`
+    /// create it, `CloseMsg`/`HoldMsg` remove it); signposts never
+    /// touch it.
+    window_open: bool,
+    /// The variable the scripted list menu (`MenuInit`) writes to.
+    list_menu_var: Option<u16>,
     /// `msgfmt` — `MessageFormat_New_Custom(8, 64)`.
     msgfmt: MessageFormat,
     /// `stringBuffer0` — the expanded text of the last message.
@@ -91,6 +98,8 @@ impl ScriptEnvironment {
             facing_direction: 0,
             std_wait_mask: 0,
             textbox_open: false,
+            window_open: false,
+            list_menu_var: None,
             msgfmt: MessageFormat::new(8),
             string_buffer0: GameString::new(),
             string_buffer1: GameString::new(),
@@ -146,10 +155,16 @@ impl ScriptEnvironment {
         self.facing_direction
     }
 
-    /// Whether the dialogue window is open (`fieldSystem->textbox_open`).
+    /// Whether a text box is showing (`fieldSystem->textbox_open`).
     #[must_use]
     pub fn textbox_open(&self) -> bool {
         self.textbox_open
+    }
+
+    /// Whether the dialogue window exists (`unk_8`).
+    #[must_use]
+    pub fn window_open(&self) -> bool {
+        self.window_open
     }
 
     /// The message-format placeholders (`msgfmt`).
@@ -354,6 +369,18 @@ impl ScriptEnvironment {
 
     pub(crate) fn set_textbox_open(&mut self, open: bool) {
         self.textbox_open = open;
+    }
+
+    pub(crate) fn set_window_open(&mut self, open: bool) {
+        self.window_open = open;
+    }
+
+    pub(crate) fn list_menu_var(&self) -> Option<u16> {
+        self.list_menu_var
+    }
+
+    pub(crate) fn set_list_menu_var(&mut self, var: Option<u16>) {
+        self.list_menu_var = var;
     }
 
     pub(crate) fn std_wait_mask(&self) -> u8 {

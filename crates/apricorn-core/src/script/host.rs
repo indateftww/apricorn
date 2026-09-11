@@ -273,7 +273,7 @@ pub enum FieldAction {
     /// `ov01_021F6ABC(3, 3, ...)` — start reading the lower-screen
     /// menu's choice.
     MenuChoiceBegin,
-    /// `MenuInit` — open the scripted list menu.
+    /// `MenuInit` — open the scripted list menu (`ov01_021EDF78`).
     MenuInit {
         /// Window x.
         x: u8,
@@ -283,6 +283,8 @@ pub enum FieldAction {
         cursor: u8,
         /// Whether B cancels.
         cancellable: u8,
+        /// The variable the menu writes its choice to (`ret_p`).
+        result_var: u16,
     },
     /// `MenuItemAdd` — `MoveTutorMenu_SetListItem`.
     MenuAddItem {
@@ -407,6 +409,10 @@ pub enum WaitFor {
     SignpostCommandFinished,
     /// The launched application returned (its result as the value).
     App,
+    /// The `TaskManager_Call` child task the last action pushed (a
+    /// warp, `CallTask_RestoreOverworld`, `FieldSystem_TakePhoto`, ...)
+    /// has returned — the script task does not run while it is up.
+    ChildTask,
     /// The yes/no menu chose (0 yes, 1 no).
     YesNo,
     /// The lower-screen menu reached `mode` (0 shown, 3 hidden).

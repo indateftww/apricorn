@@ -31,8 +31,7 @@ use super::commands::{Opcode, decode_movement};
 use super::context::{CONDITION_TABLE, NativeWait, ScriptContext, compare};
 use super::env::ScriptEnvironment;
 use super::host::{
-    AppRequest, FieldAction, FieldQuery, OBJ_PARTNER_POKE, PrintParams, PrintTarget, ScriptHost,
-    WaitFor, dir,
+    AppRequest, FieldAction, FieldQuery, PrintParams, PrintTarget, ScriptHost, WaitFor, dir,
 };
 
 /// What a handler returns: the C's `FALSE` (run the next command now)
@@ -221,13 +220,15 @@ impl Cmd<'_> {
         Ok(expanded)
     }
 
-    /// `ov01_021EF4DC` (`src/field/scrcmd_message.c:206`): open the
-    /// dialogue window if it is not up, expand `units`, and print with
+    /// `ov01_021EF4DC` (`src/field/scrcmd_message.c:206`): create the
+    /// dialogue window if `unk_8` says there is none
+    /// (`ovFieldMain_CreateMessageBox`), expand `units`, and print with
     /// font 1 at the options' speed. The caller installs the
     /// `ov01_021EF348` wait.
     fn show(&mut self, units: &[u16], can_ab_speed_up: bool, flag: u8) -> Result<(), ScriptError> {
-        if !self.env.textbox_open() {
+        if !self.env.window_open() {
             self.host.dialog_open();
+            self.env.set_window_open(true);
             self.env.set_textbox_open(true);
         }
         let text = self.expand(units)?;
@@ -519,16 +520,19 @@ pub(crate) fn execute(
         // ---- the dialogue window (scrcmd_c.c:682-720, scrcmd_message.c) ----
         Opcode::OpenMsg => {
             c.host.dialog_open();
+            c.env.set_window_open(true);
             c.env.set_textbox_open(true);
             Continue
         }
         Opcode::CloseMsg => {
             c.host.dialog_close();
+            c.env.set_window_open(false);
             c.env.set_textbox_open(false);
             Continue
         }
         Opcode::HoldMsg => {
             c.action(FieldAction::DialogHold);
+            c.env.set_window_open(false);
             c.env.set_textbox_open(false);
             Continue
         }
@@ -1113,18 +1117,21 @@ pub(crate) fn execute(
             c.host.launch(AppRequest::Mail);
             c.native(NativeWait::App { result_var: None })
         }
+        // These push a child task (`TaskManager_Call`): the C returns
+        // TRUE and the script task is simply not run until the child
+        // returns, which the host reports as `ChildTask`.
         Opcode::RestoreOverworld => {
             c.action(FieldAction::RestoreOverworld);
-            Yield
+            c.wait(WaitFor::ChildTask)
         }
         Opcode::Cmd436 => {
             c.action(FieldAction::LeaveOverworld);
-            Yield
+            c.wait(WaitFor::ChildTask)
         }
         Opcode::CameronPhoto => {
             let photo = c.u16()?;
             c.action(FieldAction::TakePhoto(photo));
-            Yield
+            c.wait(WaitFor::ChildTask)
         }
 
         // ---- fades and warps (scrcmd_c.c:2187-2260, 4097) ----
@@ -1154,7 +1161,7 @@ pub(crate) fn execute(
                 y,
                 direction,
             });
-            Yield
+            c.wait(WaitFor::ChildTask)
         }
         Opcode::Cmd582 => {
             let map = c.var()?;
@@ -1294,6 +1301,10 @@ pub(crate) fn execute(
             c.native(NativeWait::MenuChoice)
         }
         Opcode::MenuInit => {
+            // sub_02041770: the halfword names the variable the menu
+            // gets a pointer to; `data[0]` is *not* written (the C's
+            // MenuExec reads whatever an earlier command left there —
+            // nothing, in the retail Mom script).
             let x = c.u8()?;
             let y = c.u8()?;
             let cursor = c.u8()?;
@@ -1304,8 +1315,9 @@ pub(crate) fn execute(
                 y,
                 cursor,
                 cancellable,
+                result_var: ret,
             });
-            c.ctx.set_data(0, u32::from(ret));
+            c.env.set_list_menu_var(Some(ret));
             Yield
         }
         Opcode::MenuItemAdd => {
@@ -1461,8 +1473,17 @@ pub(crate) fn run_native(
         },
         NativeWait::MenuExec => match c.host.poll(WaitFor::MenuExec) {
             Some(result) => {
-                let var = c.ctx.data(0) as u16;
-                c.write(var, result)?;
+                // The choice lands in the variable MenuInit handed the
+                // menu; the C also hands `GetVarPointer(data[0])` to the
+                // touch-menu task, so a resolvable `data[0]` gets it too.
+                if let Some(var) = c.env.list_menu_var() {
+                    c.write(var, result)?;
+                }
+                let stale = c.ctx.data(0) as u16;
+                if is_saved_var(stale) || is_special_var(stale) {
+                    c.write(stale, result)?;
+                }
+                c.env.set_list_menu_var(None);
                 true
             }
             None => false,
