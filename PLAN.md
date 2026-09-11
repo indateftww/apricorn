@@ -304,10 +304,18 @@ branch with ROM-gated tests, then the orchestrator wires them into
 
 Test infrastructure landing with this phase (Phase 2's promise):
 
-- [ ] Engine trace producer + headless scripted runner (`apricorn-run`:
+- [x] Engine trace producer + headless scripted runner (`apricorn-run`:
       replay an `.apin` through `Game`, dump PNGs, emit a trace the
-      comparator checks against the oracle) and the boot-idle
-      engine-vs-oracle verdict. → `docs/engine-runner.md`
+      comparator checks against the oracle; `apricorn-replay --engine`).
+      → `apricorn-harness::engine`, `docs/engine-runner.md`.
+      Finding: the engine's boot seed value is exact (vblank counter 0,
+      matching the oracle's post-seed LCRNG/MT hashes), but the
+      committed boot-idle baseline was a soft-reset loop — the oracle
+      passed the harness's bit-set-equals-held mask into melonDS's
+      active-low `SetKeyMask`, so an idle script held L+R+START+SELECT.
+      The polarity fix and regenerated baseline land with the oracle
+      screenshot work below; the boot-latency frame offset (retail
+      seeds at VBlank 185) is then the remaining engine-side gap.
 - [ ] Oracle screenshots (`--shots`) and `corpus/new-game`: the real ROM
       driven from boot to the bedroom, with milestone frames recorded
       for engine-vs-ROM visual comparison.
