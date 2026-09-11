@@ -283,6 +283,31 @@ the front door and around New Bark Town. Headless equivalents:
 `apricorn-run --rom hg_usa.nds --input scripts/engine-walk.apin --png 3010,3153,3290 --out out/walk`
 and the retail ground truth `scripts/shots.ps1 corpus/new-game "4816"`.
 
+Picking this up later:
+
+- The work lives on branch `claude/game-development-progress-fda06c`
+  (checked out in the worktree `.claude/worktrees/game-development-progress-fda06c`
+  at the time of writing); `main` is still at Phase 4's acceptance
+  (`ac469ad`). Merge or continue from that branch.
+- Two unreviewed partial branches are parked, each one WIP commit off
+  `ac469ad`: `parked/phase6-pokemon-data` (Pokémon encryption/party/
+  bag/Pokédex views, `docs/pokemon.md`) and `parked/phase7-audio` (the
+  `apricorn-audio` crate). Rebase onto the current branch, finish and
+  review before merging.
+- Worktree setup for a fresh checkout (the inputs are gitignored): copy
+  or hardlink `hg_usa.nds` and `hg.sav` into the checkout root, clone
+  `refs/pokeheartgold` and `refs/melonds`, build the oracle with
+  `oracle/setup.ps1`. Cargo needs MinGW on `PATH` on Windows
+  (`C:\msys64\mingw64in`) for the GNU toolchain's `dlltool`.
+- Next objective in order: NPC objects + the script host (Mom's scene,
+  dialogue boxes, init scripts on map load), then the start-menu and
+  lighting hookups, the touch bottom screen, bag/party screens, then
+  the user's Phase 5 regression test and acceptance.
+- Per-subsystem notes: `docs/field-system.md`, `docs/field-data.md`,
+  `docs/field-movement.md`, `docs/script-vm.md`, `docs/menus.md`,
+  `docs/day-night.md`, `docs/engine-runner.md`, `docs/oracle.md`,
+  `corpus/new-game/README.md` (retail frame-by-frame milestones).
+
 - [ ] Map engine: HGSS's map/BG layers, collision, warp/door transitions,
       camera.
       - [x] Field data layer: map headers (ARM9 table, pinned), matrices,
