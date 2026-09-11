@@ -13,8 +13,11 @@
 //! the identity in camera space (local +x is screen right, +y screen
 //! up). Its quad is `x ∈ [−16, 16], y ∈ [0, 32], z = 0` with UVs
 //! `(0, 32)` at the bottom-left and `(32, 0)` at the top-right (both
-//! read from the ROM's display list — `posScale` 8 over a `VTX_10` /
-//! `VTX_XY` strip of `(−2, 0), (2, 0), (2, 4), (−2, 4)`): the model is
+//! read from the ROM's display list — `posScale` 8 over one
+//! `BEGIN_VTXS` primitive of type 1, `GX_BEGIN_QUADS`, whose four
+//! vertices `VTX_10 (−2, 0, 0)`, `VTX_XY (2, 0)`, `(2, 4)`, `(−2, 4)`
+//! run around the rectangle in order, each preceded by its
+//! `TEXCOORD`; one quad, no triangles, no strip): the model is
 //! anchored at the character's **feet** and stands 32 units tall,
 //! which the field presets scale to ≈1 px per unit at the target
 //! depth. The 16×16 class (member 267, `posScale` 4, `x ∈ [−8, 8]`,
