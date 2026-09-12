@@ -1,7 +1,8 @@
 # apricorn — genomförandeplan
 
 Reviderad **2026-09-12** efter kodgranskning och research. Vi utvecklar i små,
-verifierbara delar. Nästa uppgift är **5A.01**, inte hela fas 5.
+verifierbara delar. Aktuell prioritet är rendererparitet i **5B**, med den
+baseline och de mätkontrakt från **5A** som verifieringen behöver.
 
 - [Omvärdering, belägg och externa källor](docs/planning/review-2026-09-12.md).
 - [Detaljspecifikation för närmaste arbetskort](docs/planning/next-slices.md).
@@ -35,6 +36,33 @@ orakel; ingen kopiering eller översättning av GPL-kod till MIT-kärnan.
 Se research R1–R7 för referensernas användningsgränser.
 
 ## Arbetssätt och avbockning
+
+### Gren och PR för varje ändring
+
+1. Kontrollera aktuell arbetsmapp, gren, worktrees och remotes innan ändring.
+   Utveckla på en namngiven `codex/`-gren, aldrig direkt på `main`.
+2. Checka ut arbetsgrenen i den arbetsmapp där arbetet faktiskt sker. Om en
+   separat worktree behövs, ange dess absoluta sökväg och gren tydligt; en gren
+   i en annan worktree betyder inte att den aktuella arbetsmappen bytt gren.
+3. Bevara befintliga lokala ändringar. Commita endast den överenskomna delen;
+   dokumentation och pågående rendererarbete får separata, tydliga leveranser.
+4. Pusha arbetsgrenen med upstream och verifiera att den finns på rätt remote.
+   En lokal gren eller en worktree räcker inte som bevis på publicerad gren.
+5. **PR-målet för detta projekt är `matte250/apricorn:main` (`upstream`).**
+   `origin` pekar på `indateftww/apricorn`, en fork som får användas för
+   push/head-grenen. Skapa då en PR från `indateftww:<arbetsgren>` till
+   `matte250/apricorn:main`, inte till forkens `main`.
+6. Verifiera PR:ens base-repo, base-gren, head-repo, head-gren och ändrade filer
+   i GitHubs svar. Rapportera fullständig PR-länk och pushad gren. Enbart texten
+   `main` räcker inte när flera remotes finns. Merga inte utan separat instruktion.
+
+Aktuellt rendererarbete prioriterar **5B** enligt användarens instruktion.
+Mät-/baselineuppgifter från 5A genomförs i den omfattning som rendererjämförelsen
+behöver. Klippning/culling, normals/ljus/toon/shininess, Z/W-buffer, skuggor och
+fog/edge/AA är öppna verifieringskrav även där implementation redan finns.
+Field-goldens bevisar determinism; full pixelparitet kräver oraclejämförelser.
+
+### Små leveranser och acceptans
 
 En lövuppgift är en liten, sammanhängande leverans som kan granskas och
 återställas självständigt. Flera oberoende algoritmer eller funktioner innebär
