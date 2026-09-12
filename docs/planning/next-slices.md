@@ -9,7 +9,9 @@ ska verifieras/återanvändas. Ett kort är en leverans, en delmilstolpe flera k
 PLAN äger huvuduppgiftens kryss. Om ett kort delas får underuppgifter bokstavs-ID
 här. Huvudkrysset stängs först när barnen är verifierade. Dubbelbokför inte samma
 utförda ändring. En ny kunskapslucka resulterar i en mätuppgift, inte en gissad
-retailkonstant. Första kön är **5A.01 → 5A.02a → 5A.02b**, därefter 5A.03/04.
+retailkonstant. Aktuell kö är renderer **5B**, med nödvändiga baselineuppgifter
+från 5A enligt [rendererarbetskorten](renderer-slices.md). Den bredare
+infrastrukturkön är 5A.01 → 5A.02a → 5A.02b, därefter 5A.03/04.
 
 Resultatrad vid avslut:
 

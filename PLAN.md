@@ -6,6 +6,7 @@ baseline och de mätkontrakt från **5A** som verifieringen behöver.
 
 - [Omvärdering, belägg och externa källor](docs/planning/review-2026-09-12.md).
 - [Detaljspecifikation för närmaste arbetskort](docs/planning/next-slices.md).
+- [Renderer: prioriterade delkort och körd råjämförelse](docs/planning/renderer-slices.md).
 - [Tidigare plan, bevarad oförändrad](docs/planning/plan-before-review-2026-09-12.md).
 
 ## Mål och avgränsning
