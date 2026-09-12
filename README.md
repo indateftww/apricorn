@@ -6,12 +6,16 @@ apricorn loads a retail `hg_usa.nds` dump at runtime for all assets and
 reimplements the game logic with behavioral equivalence: same RNG outcomes,
 same formulas, same save format.
 
-- The plan, phase by phase: [PLAN.md](PLAN.md)
+- The plan, with small work items and acceptance gates: [PLAN.md](PLAN.md)
+- Planning review and sources: [research](docs/planning/review-2026-09-12.md);
+  detailed next steps: [work cards](docs/planning/next-slices.md).
 - Status: Phase 5 in progress — the new-game flow lands in a walkable
   bedroom; stairs and doors warp between the house floors and New Bark
   Town with movement, collision and camera ported from the original.
-  NPCs, dialogue, menus and lighting are next; exact scene parity is
-  tracked in Phase 8.
+  NPC objects and lighting are present in the working implementation;
+  live scripts/dialogue, menu integration and verified parity remain.
+  The revised plan starts with reproducible timing/state/save checks (5A)
+  and tracks renderer verification in 5B.
 - Run: `cargo run -p apricorn-desktop -- --rom hg_usa.nds`
 - Controls and remaining parity work: [game flow](docs/game-flow.md)
 
